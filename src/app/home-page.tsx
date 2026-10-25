@@ -557,24 +557,25 @@ export default function Home() {
                   <svg aria-hidden="true" viewBox="0 0 20 20" className="hidden h-4 w-4 text-slate-400 sm:block" fill="currentColor"><path fillRule="evenodd" d="M5.22 7.47a.75.75 0 0 1 1.06 0L10 11.19l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
                 </button>
                 {showProfileMenu && <div role="menu" aria-label="Profile and settings" className="absolute right-0 z-40 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 text-slate-900 shadow-xl">
-                  <div className="px-3 py-2.5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Signed in as</p>
-                    <p className="mt-1 truncate text-sm font-semibold">{profileName}</p>
-                    {profileEmail && <p className="mt-0.5 truncate text-xs text-slate-500">{profileEmail}</p>}
+                  <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Signed in as</p>
+                      <p className="mt-1 truncate text-sm font-semibold">{profileName}</p>
+                      {profileEmail && <p className="mt-0.5 truncate text-xs text-slate-500">{profileEmail}</p>}
+                    </div>
+                    <button type="button" role="menuitem" aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">
+                      {darkMode
+                        ? <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg></span>
+                        : <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z" /></svg></span>}
+                    </button>
                   </div>
                   <div className="my-1 border-t border-slate-200" />
-                  <button type="button" role="menuitem" onClick={() => { setSection("Household"); setShowProfileMenu(false); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium hover:bg-slate-50">
-                    <WorkspaceIcon section="Household" />Household
-                  </button>
-                  <button type="button" role="menuitem" aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium hover:bg-slate-50">
-                    {darkMode
-                      ? <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg></span>
-                      : <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z" /></svg></span>}
-                    <span className="sr-only">{darkMode ? "Switch to light mode" : "Switch to dark mode"}</span>
+                  <button type="button" role="menuitem" onClick={() => { setSection("Household"); setShowProfileMenu(false); }} className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium hover:bg-slate-50">
+                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center"><WorkspaceIcon section="Household" /></span>My Households
                   </button>
                   <div className="my-1 border-t border-slate-200" />
-                  <button type="button" role="menuitem" disabled={signingOut} onClick={() => { setShowProfileMenu(false); void handleSignOut(); }} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition disabled:opacity-60 ${darkMode ? "bg-red-950/70 text-red-200 hover:bg-red-900" : "text-red-700 hover:bg-red-50"}`}>
-                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" /></svg>
+                  <button type="button" role="menuitem" disabled={signingOut} onClick={() => { setShowProfileMenu(false); void handleSignOut(); }} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold transition disabled:opacity-60 ${darkMode ? "bg-red-950/70 text-red-200 hover:bg-red-900" : "text-red-700 hover:bg-red-50"}`}>
+                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" /></svg></span>
                     {signingOut ? "Signing out…" : "Sign out"}
                   </button>
                 </div>}
