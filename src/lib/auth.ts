@@ -1,6 +1,8 @@
 
 import {
+  browserSessionPersistence,
   createUserWithEmailAndPassword,
+  setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
@@ -9,6 +11,7 @@ import {
 import { auth, googleProvider } from "@/lib/firebase";
 
 export async function signInWithGoogle() {
+  await setPersistence(auth, browserSessionPersistence);
   googleProvider.setCustomParameters({
     prompt: "select_account",
   });
@@ -20,6 +23,7 @@ export async function signInWithEmail(
   email: string,
   password: string,
 ) {
+  await setPersistence(auth, browserSessionPersistence);
   return signInWithEmailAndPassword(auth, email, password);
 }
 
@@ -28,6 +32,7 @@ export async function createEmailAccount(
   email: string,
   password: string,
 ) {
+  await setPersistence(auth, browserSessionPersistence);
   const credential = await createUserWithEmailAndPassword(
     auth,
     email,
