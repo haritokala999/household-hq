@@ -152,6 +152,15 @@ test("rejects blank names, unsupported currencies, and incomplete atomic batches
     await assertFails(batch.commit());
   }
 
+  for (const currency of ["INR", "SAR", "KWD"]) {
+    const id = `currency-${currency.toLowerCase()}`;
+    const batch = writeBatch(database);
+    batch.set(doc(database, "households", id), householdDocument("alice", "Valid Name", currency));
+    batch.set(doc(database, "households", id, "members", "alice"), memberDocument("alice", "owner"));
+    batch.set(doc(database, "users", "alice", "households", id), indexDocument(id));
+    await assertSucceeds(batch.commit());
+  }
+
   const incompleteBatch = writeBatch(database);
   incompleteBatch.set(doc(database, "households", "missing-index"), householdDocument("alice"));
   incompleteBatch.set(doc(database, "households", "missing-index", "members", "alice"), memberDocument("alice", "owner"));

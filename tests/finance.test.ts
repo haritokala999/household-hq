@@ -7,6 +7,8 @@ import {
   goalProgressPercent,
   isCalendarDate,
   isMonthKey,
+  formatMoney,
+  moneyInputValue,
   parseMoneyToMinorUnits,
   previousMonthKey,
   TRANSACTION_CATEGORIES,
@@ -35,6 +37,15 @@ test("money parsing uses integer minor units and rejects invalid precision", () 
   assert.equal(parseMoneyToMinorUnits("0.01"), 1);
   assert.throws(() => parseMoneyToMinorUnits("1.001"));
   assert.throws(() => parseMoneyToMinorUnits("-1"));
+});
+
+test("Kuwaiti dinar uses three fractional digits while INR and SAR use two", () => {
+  assert.equal(parseMoneyToMinorUnits("1.234", "KWD"), 1234);
+  assert.throws(() => parseMoneyToMinorUnits("1.2345", "KWD"));
+  assert.equal(moneyInputValue(1234, "KWD"), "1.234");
+  assert.equal(formatMoney(1234, "KWD"), new Intl.NumberFormat(undefined, { style: "currency", currency: "KWD" }).format(1.234));
+  assert.equal(parseMoneyToMinorUnits("1.23", "INR"), 123);
+  assert.equal(parseMoneyToMinorUnits("1.23", "SAR"), 123);
 });
 
 test("financial summary separates income, ordinary expenses, investment, and net worth", () => {

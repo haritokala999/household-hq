@@ -8,7 +8,7 @@ import { useHouseholds } from "@/hooks/use-households";
 import { createHousehold } from "@/lib/households";
 import { acceptHouseholdInvitation, INVITATION_CODE_LENGTH } from "@/lib/invitations";
 import { auth, db } from "@/lib/firebase";
-import { HOUSEHOLD_CURRENCIES, type HouseholdCurrency } from "@/lib/types";
+import { HOUSEHOLD_CURRENCIES, HOUSEHOLD_CURRENCY_NAMES, type HouseholdCurrency } from "@/lib/types";
 
 export default function HouseholdSetupPage() {
   const router = useRouter();
@@ -114,7 +114,7 @@ export default function HouseholdSetupPage() {
                 <div>
                   <label htmlFor="currency" className="mb-1.5 block text-sm font-medium">Currency</label>
                   <select id="currency" value={currency} onChange={(event) => setCurrency(event.target.value as HouseholdCurrency)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5">
-                    {HOUSEHOLD_CURRENCIES.map((supportedCurrency) => <option key={supportedCurrency} value={supportedCurrency}>{supportedCurrency}</option>)}
+                    {HOUSEHOLD_CURRENCIES.map((supportedCurrency) => <option key={supportedCurrency} value={supportedCurrency}>{supportedCurrency} — {HOUSEHOLD_CURRENCY_NAMES[supportedCurrency]}</option>)}
                   </select>
                 </div>
                 {createError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{createError}</p>}

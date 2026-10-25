@@ -8,8 +8,17 @@ export type Household = {
   updatedAt: Timestamp;
 };
 
-export const HOUSEHOLD_CURRENCIES = ["USD", "CAD", "EUR", "GBP"] as const;
+export const HOUSEHOLD_CURRENCIES = ["USD", "CAD", "EUR", "GBP", "INR", "SAR", "KWD"] as const;
 export type HouseholdCurrency = (typeof HOUSEHOLD_CURRENCIES)[number];
+export const HOUSEHOLD_CURRENCY_NAMES: Record<HouseholdCurrency, string> = {
+  USD: "US Dollar",
+  CAD: "Canadian Dollar",
+  EUR: "Euro",
+  GBP: "British Pound",
+  INR: "Indian Rupee",
+  SAR: "Saudi Riyal",
+  KWD: "Kuwaiti Dinar",
+};
 
 export type HouseholdMembership = {
   uid: string;

@@ -102,23 +102,42 @@ function positiveMinorAmount(value: number, label: string) {
   }
 }
 
-export function parseMoneyToMinorUnits(value: string): number {
+function currencyMinorUnitScale(currency: string) {
+  const fractionDigits = new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+  }).resolvedOptions().maximumFractionDigits ?? 2;
+  return 10 ** fractionDigits;
+}
+
+export function parseMoneyToMinorUnits(value: string, currency = "USD"): number {
   const trimmed = value.trim();
-  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
-    throw new Error("Enter an amount with up to two decimal places.");
+  const scale = currencyMinorUnitScale(currency);
+  const fractionDigits = Math.round(Math.log10(scale));
+  const fractionPattern = fractionDigits === 0 ? "" : `(?:\\.\\d{1,${fractionDigits}})?`;
+  if (!new RegExp(`^\\d+${fractionPattern}$`).test(trimmed)) {
+    throw new Error(`Enter an amount with up to ${fractionDigits} decimal places.`);
   }
   const [whole, fractional = ""] = trimmed.split(".");
-  const amount = Number(whole) * 100 + Number(fractional.padEnd(2, "0"));
+  const amount = Number(whole) * scale + Number(fractional.padEnd(fractionDigits, "0"));
   if (!Number.isSafeInteger(amount)) throw new Error("Amount is too large.");
   positiveMinorAmount(amount, "Amount");
   return amount;
 }
 
 export function formatMoney(minor: number, currency: string): string {
+  const scale = currencyMinorUnitScale(currency);
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency,
-  }).format(minor / 100);
+  }).format(minor / scale);
+}
+
+export function moneyInputValue(minor?: number, currency = "USD") {
+  if (minor === undefined) return "";
+  const scale = currencyMinorUnitScale(currency);
+  const fractionDigits = Math.round(Math.log10(scale));
+  return (minor / scale).toFixed(fractionDigits);
 }
 
 export function currentMonthKey(date = new Date()): string {

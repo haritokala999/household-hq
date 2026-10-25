@@ -15,7 +15,8 @@ import {
   renameHousehold,
   transferHouseholdOwnership,
 } from "@/lib/households";
-import { createHouseholdInvitation, INVITATION_CODE_LENGTH, INVITATION_LIFETIME_DAYS } from "@/lib/invitations";
+import { acceptHouseholdInvitation, createHouseholdInvitation, INVITATION_CODE_LENGTH, INVITATION_LIFETIME_DAYS } from "@/lib/invitations";
+import { createHousehold } from "@/lib/households";
 import {
   addAccountSnapshot,
   addGoalProgress,
@@ -33,6 +34,7 @@ import {
   getAccountSnapshots,
   isMonthKey,
   loadHouseholdFinance,
+  moneyInputValue,
   parseMoneyToMinorUnits,
   previousMonthKey,
   saveAccount,
@@ -52,10 +54,13 @@ import type {
   FinancialTransaction,
   HouseholdMember,
   ManualValueRecord,
+  HouseholdCurrency,
+  HouseholdMembership,
   MonthlyBudget,
   SavingsGoal,
   RecurringPayment,
 } from "@/lib/types";
+import { HOUSEHOLD_CURRENCIES, HOUSEHOLD_CURRENCY_NAMES } from "@/lib/types";
 
 type Section = "Dashboard" | "Transactions" | "Budgets" | "Goals" | "Investments" | "Household";
 type AppNotification = {
@@ -74,10 +79,6 @@ const secondaryButtonClass = "rounded-lg border border-slate-300 px-3 py-2 text-
 const emptyFinance: HouseholdFinanceData = {
   accounts: [], categories: [], transactions: [], budgets: [], goals: [], assets: [], liabilities: [], recurringPayments: [],
 };
-
-function moneyInputValue(minor?: number) {
-  return minor === undefined ? "" : (minor / 100).toFixed(2);
-}
 
 function focusEditTarget(element: HTMLElement | null) {
   if (!element) return;
@@ -103,7 +104,7 @@ function useEditFocus<T extends HTMLElement>(targetKey: boolean | string | undef
 
 export default function Home() {
   const router = useRouter();
-  const { uid, households, activeHouseholdId, loading: householdsLoading, error: householdError, retry, selectHousehold } = useHouseholds();
+  const { uid, households, activeHouseholdId, loading: householdsLoading, error: householdError, retry, refreshHouseholds, selectHousehold } = useHouseholds();
   const [section, setSection] = useState<Section>("Dashboard");
   const [finance, setFinance] = useState<HouseholdFinanceData>(emptyFinance);
   const [members, setMembers] = useState<HouseholdMember[]>([]);
@@ -373,6 +374,28 @@ export default function Home() {
     }
   }
 
+  async function handleCreateAdditionalHousehold(name: string, householdCurrency: HouseholdCurrency) {
+    const newHouseholdId = await createHousehold(name, householdCurrency);
+    await refreshHouseholds();
+    selectHousehold(newHouseholdId);
+    addNotification("Your new household is ready.");
+  }
+
+  async function handleJoinAnotherHousehold(code: string) {
+    const user = auth.currentUser;
+    if (!user || user.uid !== uid) {
+      throw new Error("Your sign-in changed. Refresh the page and sign in again before joining a household.");
+    }
+    const joinedHouseholdId = await acceptHouseholdInvitation(db, code, {
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+    });
+    await refreshHouseholds();
+    selectHousehold(joinedHouseholdId);
+    addNotification("You joined the household.");
+  }
+
   if (householdsLoading) {
     return <AuthGuard><LoadingPanel label="Loading your household…" /></AuthGuard>;
   }
@@ -510,7 +533,7 @@ export default function Home() {
                   return runAction(() => addGoalProgress(db, householdId!, goalId, amountMinor), completesGoal ? "Goal achieved — congratulations!" : "Goal progress updated.", onSuccess, completesGoal ? "goal" : undefined);
                 }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.")} editing={editingGoal} setEditing={setEditingGoal} />}
                 {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} editing={editingAccount} setEditing={setEditingAccount} snapshots={snapshotHistory} onSaveAccount={(input, existing) => runAction(async () => { const accountId = await saveAccount(db, householdId!, uid!, currency, input, existing); const thisMonth = currentMonthKey(); if (!(snapshotHistory[accountId] ?? []).some((snapshot) => snapshot.month === thisMonth)) await addAccountSnapshot(db, householdId!, accountId, uid!, thisMonth, input.balanceMinor); }, "Account balance saved.")} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.")} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.")} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`)} />}
-                {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
+                {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} onSelectHousehold={selectHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
               </>
             )}
 
@@ -662,7 +685,7 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
     setPaymentError("");
     setSavingPayment(true);
     try {
-      await onAddPayment({ name: paymentName, amountMinor: parseMoneyToMinorUnits(paymentAmount), dueDay: Number(paymentDueDay) });
+      await onAddPayment({ name: paymentName, amountMinor: parseMoneyToMinorUnits(paymentAmount, currency), dueDay: Number(paymentDueDay) });
       setPaymentName("");
       setPaymentAmount("");
       setPaymentDueDay("1");
@@ -738,12 +761,12 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
     setCategory(editing?.category ?? "");
     setDescription(editing?.description ?? "");
     setShowDescription(Boolean(editing?.description));
-    setAmount(moneyInputValue(editing?.amountMinor));
+    setAmount(moneyInputValue(editing?.amountMinor, currency));
     setDate(editing?.date ?? new Date().toISOString().slice(0, 10));
     setAccountId(editing?.accountId ?? "");
     setTransferDestination(editing?.transferDestination ?? null);
     setShowTransferDialog(false);
-  }, [editing]);
+  }, [editing, currency]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -761,7 +784,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
         transferDestination: type === "transfer" ? transferDestination : null,
         category,
         description,
-        amountMinor: parseMoneyToMinorUnits(amount),
+        amountMinor: parseMoneyToMinorUnits(amount, currency),
         date,
         accountId: accountId || null,
         ownerUid,
@@ -924,8 +947,8 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
   const editorRef = useEditFocus<HTMLElement>(editing?.id);
   // Reset controlled form fields when a different record is selected.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setCategory(editing?.category ?? ""); setLimit(moneyInputValue(editing?.limitMinor)); setPeriod(editing?.period ?? "monthly"); if (editing) setMonth(editing.month); }, [editing, setMonth]);
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); try { await onSave({ month: period === "yearly" ? `${month.slice(0, 4)}-01` : month, period, category, limitMinor: parseMoneyToMinorUnits(limit) }, editing); setEditing(undefined); setCategory(""); setLimit(""); setPeriod("monthly"); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save budget."); } }
+  useEffect(() => { setCategory(editing?.category ?? ""); setLimit(moneyInputValue(editing?.limitMinor, currency)); setPeriod(editing?.period ?? "monthly"); if (editing) setMonth(editing.month); }, [editing, setMonth, currency]);
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); try { await onSave({ month: period === "yearly" ? `${month.slice(0, 4)}-01` : month, period, category, limitMinor: parseMoneyToMinorUnits(limit, currency) }, editing); setEditing(undefined); setCategory(""); setLimit(""); setPeriod("monthly"); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save budget."); } }
   const rows = finance.budgets.filter((item) => (item.period ?? "monthly") === "yearly" ? item.month.slice(0, 4) === month.slice(0, 4) : item.month === month);
   const previousMonth = isMonthKey(month) ? previousMonthKey(month) : "";
   const previousMonthBudgetCount = finance.budgets.filter((item) => (item.period ?? "monthly") === "monthly" && item.month === previousMonth).length;
@@ -1005,7 +1028,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
 
   // Reset controlled form fields when a different record is selected.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setName(editing?.name ?? ""); setTarget(moneyInputValue(editing?.targetMinor)); setCurrent(moneyInputValue(editing?.currentMinor) || "0"); setDeadline(editing?.deadline ?? ""); }, [editing]);
+  useEffect(() => { setName(editing?.name ?? ""); setTarget(moneyInputValue(editing?.targetMinor, currency)); setCurrent(moneyInputValue(editing?.currentMinor, currency) || "0"); setDeadline(editing?.deadline ?? ""); }, [editing, currency]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1013,8 +1036,8 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
     try {
       await onSave({
         name,
-        targetMinor: parseMoneyToMinorUnits(target),
-        currentMinor: parseMoneyToMinorUnits(current),
+        targetMinor: parseMoneyToMinorUnits(target, currency),
+        currentMinor: parseMoneyToMinorUnits(current, currency),
         deadline: deadline || null,
         ownerUid: editing?.ownerUid ?? uid,
       }, editing);
@@ -1033,7 +1056,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
     setProgressError("");
     setSavingProgress(true);
     try {
-      const amountMinor = parseMoneyToMinorUnits(progressAmount);
+      const amountMinor = parseMoneyToMinorUnits(progressAmount, currency);
       if (amountMinor <= 0) throw new Error("Enter an amount greater than zero.");
       await onAddProgress(goalId, amountMinor, () => {
         setProgressGoalId(undefined);
@@ -1155,8 +1178,8 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
     setName(editing?.name ?? "");
     setKind(editing?.kind ?? "savings");
     setOwnerUid(editing?.ownerUid ?? uid);
-    setBalance(moneyInputValue(editing?.balanceMinor));
-  }, [editing, uid]);
+    setBalance(moneyInputValue(editing?.balanceMinor, currency));
+  }, [editing, uid, currency]);
 
   const columns = [
     { kind: "brokerage", title: "Brokerage", destination: "brokerage" },
@@ -1240,7 +1263,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
     event.preventDefault();
     setAccountError("");
     try {
-      await onSaveAccount({ name: name.trim(), kind, ownerUid, balanceMinor: parseMoneyToMinorUnits(balance) }, editing);
+      await onSaveAccount({ name: name.trim(), kind, ownerUid, balanceMinor: parseMoneyToMinorUnits(balance, currency) }, editing);
       setEditing(undefined);
       setName("");
       setBalance("");
@@ -1261,7 +1284,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
       if ((snapshots[snapshotAccount] ?? []).some((snapshot) => snapshot.month === snapshotMonth)) {
         throw new Error("A snapshot already exists for that account and month. Monthly snapshots are preserved as history.");
       }
-      await onSnapshot(snapshotAccount, snapshotMonth, parseMoneyToMinorUnits(snapshotAmount));
+      await onSnapshot(snapshotAccount, snapshotMonth, parseMoneyToMinorUnits(snapshotAmount, currency));
       setSnapshotAmount("");
     } catch (cause) {
       setSnapshotError(cause instanceof Error ? cause.message : "Could not record the snapshot.");
@@ -1271,7 +1294,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
     event.preventDefault();
     setManualValueError("");
     try {
-      await onSaveManualValue(manualValueType, { name: manualValueName, amountMinor: parseMoneyToMinorUnits(manualValueAmount), ownerUid: editingManualValue?.ownerUid ?? uid }, editingManualValue);
+      await onSaveManualValue(manualValueType, { name: manualValueName, amountMinor: parseMoneyToMinorUnits(manualValueAmount, currency), ownerUid: editingManualValue?.ownerUid ?? uid }, editingManualValue);
       setEditingManualValue(undefined);
       setManualValueName("");
       setManualValueAmount("");
@@ -1357,7 +1380,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
             <div key={group} className="border-t border-slate-100 pt-4">
               <h3 className="font-semibold">{title}</h3>
               <div className="mt-2 divide-y divide-slate-100">
-                {records.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-slate-500">{memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(item.amountMinor, currency)}</span>{item.ownerUid === uid && <><button type="button" onClick={() => { setManualValueType(group); setEditingManualValue(item); setManualValueName(item.name); setManualValueAmount(moneyInputValue(item.amountMinor)); }} className="text-xs font-semibold text-teal-800 underline">Edit</button><button type="button" onClick={() => void onDeleteManualValue(group, item.id)} className="text-xs font-semibold text-slate-500 underline">Delete</button></>}</div></div>)}
+                {records.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-slate-500">{memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(item.amountMinor, currency)}</span>{item.ownerUid === uid && <><button type="button" onClick={() => { setManualValueType(group); setEditingManualValue(item); setManualValueName(item.name); setManualValueAmount(moneyInputValue(item.amountMinor, currency)); }} className="text-xs font-semibold text-teal-800 underline">Edit</button><button type="button" onClick={() => void onDeleteManualValue(group, item.id)} className="text-xs font-semibold text-slate-500 underline">Delete</button></>}</div></div>)}
                 {!records.length && <p className="py-3 text-sm text-slate-500">No {group} added.</p>}
               </div>
             </div>
@@ -1374,9 +1397,14 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
   </div>;
 }
 
-function HouseholdSection({ householdName, uid, isOwner, members, invitationCode, onInvite, onPromoteMember, onTransferOwnership, updatingOwnership }: {
+function HouseholdSection({ householdName, uid, households, activeHouseholdId, onSelectHousehold, onCreateHousehold, onJoinHousehold, isOwner, members, invitationCode, onInvite, onPromoteMember, onTransferOwnership, updatingOwnership }: {
   householdName: string;
   uid: string;
+  households: HouseholdMembership[];
+  activeHouseholdId: string;
+  onSelectHousehold: (householdId: string) => void;
+  onCreateHousehold: (name: string, currency: HouseholdCurrency) => Promise<void>;
+  onJoinHousehold: (code: string) => Promise<void>;
   isOwner: boolean;
   members: HouseholdMember[];
   invitationCode: string;
@@ -1386,9 +1414,89 @@ function HouseholdSection({ householdName, uid, isOwner, members, invitationCode
   updatingOwnership: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [newHouseholdName, setNewHouseholdName] = useState("");
+  const [newHouseholdCurrency, setNewHouseholdCurrency] = useState<HouseholdCurrency>("USD");
+  const [invitationToJoin, setInvitationToJoin] = useState("");
+  const [householdAction, setHouseholdAction] = useState<"create" | "join" | null>(null);
+  const [householdActionError, setHouseholdActionError] = useState("");
   async function copyCode() { try { await navigator.clipboard.writeText(invitationCode); setCopied(true); } catch { setCopied(false); } }
+
+  async function createAnotherHousehold(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setHouseholdActionError("");
+    setHouseholdAction("create");
+    try {
+      await onCreateHousehold(newHouseholdName, newHouseholdCurrency);
+      setNewHouseholdName("");
+    } catch (cause) {
+      setHouseholdActionError(cause instanceof Error ? cause.message : "Could not create a household.");
+    } finally {
+      setHouseholdAction(null);
+    }
+  }
+
+  async function joinAnotherHousehold(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setHouseholdActionError("");
+    setHouseholdAction("join");
+    try {
+      await onJoinHousehold(invitationToJoin);
+      setInvitationToJoin("");
+    } catch (cause) {
+      setHouseholdActionError(cause instanceof Error ? cause.message : "Could not join the household.");
+    } finally {
+      setHouseholdAction(null);
+    }
+  }
+
   return (
     <div className="grid gap-6 xl:grid-cols-2">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 xl:col-span-2">
+        <h2 className="font-bold">Your households</h2>
+        <p className="mt-1 text-sm text-slate-600">Switch between your household workspaces. Each one keeps its finances separate.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {households.map((household) => {
+            const active = household.householdId === activeHouseholdId;
+            return (
+              <article key={household.householdId} className={`flex items-center justify-between gap-3 rounded-xl border p-4 ${active ? "border-teal-300 bg-teal-50/70" : "border-slate-200"}`}>
+                <div className="min-w-0">
+                  <p className="truncate font-semibold">{household.householdName}</p>
+                  <p className="mt-1 text-xs text-slate-500">{household.role === "owner" ? "Owner" : "Member"} · {household.currency}</p>
+                </div>
+                <button type="button" disabled={active} onClick={() => onSelectHousehold(household.householdId)} className={active ? "shrink-0 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white" : `${secondaryButtonClass} shrink-0`}>
+                  {active ? "Current" : "Switch"}
+                </button>
+              </article>
+            );
+          })}
+        </div>
+        {householdActionError && householdAction === null && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{householdActionError}</p>}
+      </section>
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <h2 className="font-bold">Create another household</h2>
+        <p className="mt-2 text-sm text-slate-600">Start a separate workspace. You’ll become its owner and can invite members.</p>
+        <form onSubmit={createAnotherHousehold} className="mt-4 space-y-3">
+          <label className="block text-sm font-medium">Household name
+            <input required maxLength={80} value={newHouseholdName} onChange={(event) => setNewHouseholdName(event.target.value)} placeholder="e.g. Vacation home" className={`${inputClass} mt-1`} />
+          </label>
+          <label className="block text-sm font-medium">Currency
+            <select value={newHouseholdCurrency} onChange={(event) => setNewHouseholdCurrency(event.target.value as HouseholdCurrency)} className={`${inputClass} mt-1`}>
+              {HOUSEHOLD_CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency} — {HOUSEHOLD_CURRENCY_NAMES[currency]}</option>)}
+            </select>
+          </label>
+          <button disabled={householdAction !== null} className={`${buttonClass} disabled:opacity-60`}>{householdAction === "create" ? "Creating…" : "Create household"}</button>
+        </form>
+      </section>
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <h2 className="font-bold">Join another household</h2>
+        <p className="mt-2 text-sm text-slate-600">Enter the private invitation code shared by an owner to join their workspace.</p>
+        <form onSubmit={joinAnotherHousehold} className="mt-4 space-y-3">
+          <label className="block text-sm font-medium">Invitation code
+            <input required autoCapitalize="none" autoCorrect="off" spellCheck={false} pattern="[A-Za-z0-9_-]{22}" maxLength={INVITATION_CODE_LENGTH} value={invitationToJoin} onChange={(event) => setInvitationToJoin(event.target.value.replace(/[^A-Za-z0-9_-]/g, "").slice(0, INVITATION_CODE_LENGTH))} placeholder="Paste invitation code" className={`${inputClass} mt-1 font-mono`} />
+          </label>
+          <button disabled={householdAction !== null || invitationToJoin.length !== INVITATION_CODE_LENGTH} className={`${buttonClass} disabled:opacity-60`}>{householdAction === "join" ? "Joining…" : "Join household"}</button>
+        </form>
+      </section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold">{householdName}</h2>
         <p className="mt-2 text-sm text-slate-600">Household data is shared with every active member. Each record also tracks its creator and, where relevant, its owner.</p>

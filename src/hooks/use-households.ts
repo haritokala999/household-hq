@@ -79,6 +79,21 @@ export function useHouseholds() {
     return Promise.resolve();
   }, [load, uid]);
 
+  const refreshHouseholds = useCallback(async () => {
+    if (!uid) throw new Error("You must be signed in to refresh your households.");
+    const version = ++requestVersion.current;
+    setError("");
+    try {
+      const results = await getHouseholdsForUser(db, uid);
+      if (version === requestVersion.current) setHouseholds(results);
+      return results;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Could not refresh your households.";
+      if (version === requestVersion.current) setError(message);
+      throw cause instanceof Error ? cause : new Error(message);
+    }
+  }, [uid]);
+
   const selectHousehold = useCallback((householdId: string) => {
     if (!uid) return;
     try {
@@ -89,5 +104,5 @@ export function useHouseholds() {
     setActiveHouseholdId(householdId);
   }, [uid]);
 
-  return { uid, households, activeHouseholdId, loading, error, retry, selectHousehold };
+  return { uid, households, activeHouseholdId, loading, error, retry, refreshHouseholds, selectHousehold };
 }

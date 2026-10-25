@@ -46,7 +46,7 @@ service cloud.firestore {
     }
 
     function validCurrency(currency) {
-      return currency in ['USD', 'CAD', 'EUR', 'GBP'];
+      return currency in ['USD', 'CAD', 'EUR', 'GBP', 'INR', 'SAR', 'KWD'];
     }
 
     function validAmount(amount, allowZero) {
