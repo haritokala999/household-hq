@@ -2,6 +2,10 @@
 "use client";
 
 import { useState } from "react";
+import AuthGuard from "@/components/auth-guard";
+import { useRouter } from "next/navigation";
+import { signOutUser } from "@/lib/auth";
+
 
 const transactions = [
   { name: "Monthly salary", category: "Income", date: "Oct 23", account: "Checking", amount: 12000, type: "income", owner: "You" },
@@ -36,8 +40,19 @@ const money = (value: number) =>
 export default function Home() {
   const [active, setActive] = useState("Dashboard");
   const [period, setPeriod] = useState("This month");
+  const router = useRouter();
+
+async function handleSignOut() {
+  try {
+    await signOutUser();
+    router.replace("/login");
+  } catch (error) {
+    console.error("Sign-out failed:", error);
+  }
+}
 
   return (
+     <AuthGuard>
     <main className="min-h-screen bg-[#f7f8fa] text-slate-900 md:flex">
       <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white md:min-h-screen md:w-64 md:border-b-0 md:border-r">
         <div className="flex items-center gap-3 px-6 py-6">
@@ -108,14 +123,23 @@ export default function Home() {
               {active === "Dashboard" ? "Your household overview" : active}
             </h1>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="hidden rounded-full bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 sm:inline-flex">
-              Demo data
-            </span>
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-800">
-              HH
-            </div>
-          </div>
+          
+<div className="flex items-center gap-3">
+  <span className="hidden rounded-full bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 sm:inline-flex">
+    Demo data
+  </span>
+  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-800">
+    HH
+  </div>
+  <button
+    type="button"
+    onClick={handleSignOut}
+    className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50"
+  >
+    Sign out
+  </button>
+</div>
+
         </header>
 
         <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-8">
@@ -328,6 +352,7 @@ export default function Home() {
         </div>
       </section>
     </main>
+     </AuthGuard>
   );
 }
 
