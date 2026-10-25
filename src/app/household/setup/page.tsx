@@ -81,7 +81,7 @@ export default function HouseholdSetupPage() {
 
   return (
     <AuthGuard>
-      <main className="flex min-h-screen flex-col bg-[#f7f8fa] text-slate-900">
+      <main className="flex min-h-screen flex-col bg-[#f3f7f5] text-slate-900">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:px-8">
           <div><p className="font-bold">Household HQ</p><p className="text-xs text-slate-500">Your money, together.</p></div>
           <div className="flex items-center gap-3">

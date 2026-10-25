@@ -281,8 +281,23 @@ test("authorized members can use financial records while unrelated users and unk
     }));
     const uid = database === alice ? "alice" : "bob";
     await assertSucceeds(setDoc(doc(database, "households", householdId, "transactions", `${uid}-paycheck`), {
-      type: "credit", purpose: "income", category: "Paycheck", description: "Monthly pay", amountMinor: 500000,
+      type: "credit", purpose: "income", transferDestination: null, category: "Paycheck", description: "Monthly pay", amountMinor: 500000,
       date: "2026-10-01", accountId: null, ownerUid: uid, createdBy: uid,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(database, "households", householdId, "transactions", `${uid}-transfer`), {
+      type: "transfer", purpose: "investment", transferDestination: "brokerage", category: "Savings and expenses", description: "Move to brokerage", amountMinor: 25000,
+      date: "2026-10-02", accountId: null, ownerUid: uid, createdBy: uid,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(database, "households", householdId, "transactions", `${uid}-savings-transfer`), {
+      type: "transfer", purpose: "investment", transferDestination: "cash", category: "Savings and expenses", description: "Savings contribution", amountMinor: 15000,
+      date: "2026-10-02", accountId: null, ownerUid: uid, createdBy: uid,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(database, "households", householdId, "transactions", `${uid}-custom-category`), {
+      type: "debit", purpose: "ordinary", transferDestination: null, category: "Unlisted category", description: "Should be rejected", amountMinor: 1000,
+      date: "2026-10-03", accountId: null, ownerUid: uid, createdBy: uid,
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
     await assertSucceeds(setDoc(doc(database, "households", householdId, "goals", `${uid}-goal`), {
@@ -296,7 +311,7 @@ test("authorized members can use financial records while unrelated users and unk
   }));
   await assertFails(getDoc(doc(mallory, "households", householdId, "transactions", "alice-paycheck")));
   await assertFails(getDoc(doc(mallory, "households", householdId, "goals", "alice-goal")));
-  await assertFails(getDocs(collection(alice, "households", householdId, "recurringPayments")));
+  await assertSucceeds(getDocs(collection(alice, "households", householdId, "recurringPayments")));
   await assertFails(getDoc(doc(alice, "households", householdId, "recurringPayments", "bill", "paymentOccurrences", "october")));
 });
 

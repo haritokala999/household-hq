@@ -16,8 +16,25 @@ import type {
   FinancialTransaction,
   ManualValueRecord,
   MonthlyBudget,
+  RecurringPayment,
   SavingsGoal,
 } from "@/lib/types";
+
+export const TRANSACTION_CATEGORIES = [
+  "Paycheck",
+  "Groceries",
+  "Housing & utilities",
+  "Shopping",
+  "Eatout",
+  "Transportation",
+  "Travel",
+  "Savings and expenses",
+  "Health and fitness",
+  "India Loan",
+  "MISC",
+] as const;
+
+export const SAVINGS_CATEGORY = "Savings and expenses";
 
 export type HouseholdFinanceData = {
   accounts: FinancialAccount[];
@@ -27,6 +44,7 @@ export type HouseholdFinanceData = {
   goals: SavingsGoal[];
   assets: ManualValueRecord[];
   liabilities: ManualValueRecord[];
+  recurringPayments: RecurringPayment[];
 };
 
 const path = (householdId: string, group: string) => ["households", householdId, group] as const;
@@ -44,7 +62,7 @@ export async function loadHouseholdFinance(
   database: Firestore,
   householdId: string,
 ): Promise<HouseholdFinanceData> {
-  const [accounts, categories, transactions, budgets, goals, assets, liabilities] = await Promise.all([
+  const [accounts, categories, transactions, budgets, goals, assets, liabilities, recurringPayments] = await Promise.all([
     readCollection<FinancialAccount>(database, householdId, "accounts"),
     readCollection<FinanceCategory>(database, householdId, "categories"),
     readCollection<FinancialTransaction>(database, householdId, "transactions"),
@@ -52,8 +70,25 @@ export async function loadHouseholdFinance(
     readCollection<SavingsGoal>(database, householdId, "goals"),
     readCollection<ManualValueRecord>(database, householdId, "assets"),
     readCollection<ManualValueRecord>(database, householdId, "liabilities"),
+    readCollection<RecurringPayment>(database, householdId, "recurringPayments"),
   ]);
-  return { accounts, categories, transactions, budgets, goals, assets, liabilities };
+  return { accounts, categories, transactions, budgets, goals, assets, liabilities, recurringPayments };
+}
+
+type RecurringPaymentInput = Pick<RecurringPayment, "name" | "amountMinor" | "dueDay">;
+
+export async function saveRecurringPayment(database: Firestore, householdId: string, actorUid: string, input: RecurringPaymentInput) {
+  const name = input.name.trim();
+  if (!name || name.length > 80) throw new Error("Payment names must be 1–80 characters.");
+  if (!Number.isInteger(input.dueDay) || input.dueDay < 1 || input.dueDay > 31) throw new Error("Choose a due day from 1 to 31.");
+  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor < 1) throw new Error("Payment amount must be greater than zero.");
+  const reference = doc(collection(database, ...path(householdId, "recurringPayments")));
+  await setDoc(reference, { name, amountMinor: input.amountMinor, dueDay: input.dueDay, createdBy: actorUid, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  return reference.id;
+}
+
+export async function deleteRecurringPayment(database: Firestore, householdId: string, paymentId: string) {
+  await deleteDoc(doc(database, ...path(householdId, "recurringPayments"), paymentId));
 }
 
 function positiveMinorAmount(value: number, label: string) {
@@ -117,7 +152,7 @@ export function calculateFinanceSummary(
     .filter((item) => item.type === "debit" && item.purpose === "ordinary")
     .reduce((sum, item) => sum + item.amountMinor, 0);
   const investmentContributionsMinor = currentTransactions
-    .filter((item) => item.type === "debit" && item.purpose === "investment")
+    .filter((item) => (item.type === "debit" || item.type === "transfer") && item.purpose === "investment")
     .reduce((sum, item) => sum + item.amountMinor, 0);
 
   return {
@@ -179,7 +214,7 @@ export async function addAccountSnapshot(
 }
 
 type TransactionInput = Pick<FinancialTransaction,
-  "type" | "purpose" | "category" | "description" | "amountMinor" | "date" | "accountId" | "ownerUid"
+  "type" | "purpose" | "transferDestination" | "category" | "description" | "amountMinor" | "date" | "accountId" | "ownerUid"
 >;
 
 export async function saveTransaction(
@@ -189,9 +224,17 @@ export async function saveTransaction(
   input: TransactionInput,
   existing?: FinancialTransaction,
 ) {
+  if (!(TRANSACTION_CATEGORIES as readonly string[]).includes(input.category)
+    && input.category !== existing?.category) {
+    throw new Error("Choose one of the supported transaction categories.");
+  }
   positiveMinorAmount(input.amountMinor, "Transaction amount");
-  if ((input.type === "credit") !== (input.purpose === "income")) {
-    throw new Error("Credits must be income; debits must be ordinary expenses or investments.");
+  const validClassification = (input.type === "credit" && input.purpose === "income")
+    || (input.type === "debit" && (input.purpose === "ordinary" || input.purpose === "investment"))
+    || (input.type === "transfer" && input.purpose === "investment" && (input.transferDestination === "brokerage" || input.transferDestination === "cash"));
+  if (!validClassification) throw new Error("Choose a valid income, expense, or transfer type.");
+  if (input.type === "transfer" ? input.transferDestination === null : input.transferDestination !== null) {
+    throw new Error("Choose Brokerage or Cash as the transfer destination.");
   }
   if (!isCalendarDate(input.date)) {
     throw new Error("Choose a valid transaction date.");

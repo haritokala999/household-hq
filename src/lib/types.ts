@@ -55,8 +55,9 @@ export type AccountSnapshot = {
 
 export type FinancialTransaction = {
   id: string;
-  type: "credit" | "debit";
+  type: "credit" | "debit" | "transfer";
   purpose: "income" | "ordinary" | "investment";
+  transferDestination: "brokerage" | "cash" | null;
   category: string;
   description: string;
   amountMinor: number;
@@ -85,6 +86,16 @@ export type SavingsGoal = {
   currentMinor: number;
   deadline: string | null;
   ownerUid: string;
+  createdBy: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type RecurringPayment = {
+  id: string;
+  name: string;
+  amountMinor: number;
+  dueDay: number;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;

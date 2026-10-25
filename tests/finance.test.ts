@@ -6,6 +6,7 @@ import {
   isCalendarDate,
   isMonthKey,
   parseMoneyToMinorUnits,
+  TRANSACTION_CATEGORIES,
 } from "../src/lib/finance";
 import { DEFAULT_CATEGORIES, type FinancialTransaction } from "../src/lib/types";
 
@@ -13,6 +14,7 @@ const transaction = (overrides: Partial<FinancialTransaction>): FinancialTransac
   id: "tx",
   type: "debit",
   purpose: "ordinary",
+  transferDestination: null,
   category: "Groceries",
   description: "",
   amountMinor: 1000,
@@ -44,6 +46,7 @@ test("financial summary separates income, ordinary expenses, investment, and net
       transaction({ type: "credit", purpose: "income", amountMinor: 50000 }),
       transaction({ type: "debit", purpose: "ordinary", amountMinor: 12000 }),
       transaction({ type: "debit", purpose: "investment", amountMinor: 8000 }),
+      transaction({ type: "transfer", purpose: "investment", transferDestination: "brokerage", amountMinor: 6000 }),
       transaction({ type: "credit", purpose: "income", date: "2026-09-30", amountMinor: 90000 }),
     ],
   }, "2026-10");
@@ -53,8 +56,8 @@ test("financial summary separates income, ordinary expenses, investment, and net
     netWorthMinor: 90000,
     incomeMinor: 50000,
     ordinaryExpensesMinor: 12000,
-    investmentContributionsMinor: 8000,
-    availableToSpendMinor: 30000,
+    investmentContributionsMinor: 14000,
+    availableToSpendMinor: 24000,
   });
 });
 
@@ -78,6 +81,7 @@ test("month and calendar dates are strictly validated", () => {
 });
 
 test("new households initialize required income, expense, and investment categories", () => {
+  assert.ok(TRANSACTION_CATEGORIES.includes("Paycheck"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Paycheck" && category.kind === "income"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Groceries" && category.kind === "expense"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.kind === "investment"));

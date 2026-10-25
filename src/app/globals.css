@@ -1,15 +1,22 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f3f7f5;
+  --foreground: #172b3a;
+  --hh-primary: #0f766e;
+  --hh-primary-hover: #115e59;
+  --hh-primary-soft: #eaf6f2;
+  --hh-border-hover: #a7d6c7;
+  --font-household-sans: Arial, Helvetica, sans-serif;
+  --font-household-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-household-sans);
+  --font-mono: var(--font-household-mono);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -23,4 +30,127 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+a {
+  transition: color 160ms ease, background-color 160ms ease,
+    border-color 160ms ease, box-shadow 160ms ease, filter 160ms ease,
+    transform 160ms ease;
+}
+
+button:not(:disabled):hover {
+  filter: saturate(1.12) brightness(0.97);
+  transform: translateY(-1px);
+}
+
+button:not(:disabled):active {
+  transform: translateY(0) scale(0.99);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #5eead4;
+  outline-offset: 2px;
+}
+
+.app-shell .rounded-2xl.border-slate-200,
+.app-shell .rounded-xl.border-slate-100,
+.app-shell .rounded-xl.border-slate-200,
+.app-shell .household-info-card {
+  transition: border-color 180ms ease, box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.app-shell .rounded-2xl.border-slate-200:hover,
+.app-shell .rounded-xl.border-slate-100:hover,
+.app-shell .rounded-xl.border-slate-200:hover,
+.app-shell .household-info-card:hover {
+  border-color: var(--hh-border-hover);
+  box-shadow: 0 8px 22px rgb(15 118 110 / 8%);
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  a,
+  .app-shell .rounded-2xl.border-slate-200,
+  .app-shell .rounded-xl.border-slate-100,
+  .app-shell .rounded-xl.border-slate-200,
+  .app-shell .household-info-card {
+    transition-duration: 0.01ms !important;
+  }
+
+  button:not(:disabled):hover,
+  button:not(:disabled):active,
+  .app-shell .rounded-2xl.border-slate-200:hover,
+  .app-shell .rounded-xl.border-slate-100:hover,
+  .app-shell .rounded-xl.border-slate-200:hover,
+  .app-shell .household-info-card:hover {
+    transform: none;
+  }
+}
+
+.app-dark {
+  background: #111827 !important;
+  color: #e5e7eb !important;
+  color-scheme: dark;
+}
+
+.app-dark .bg-white { background-color: #1f2937 !important; }
+.app-dark .bg-\[\#f3f7f5\] { background-color: #111827 !important; }
+.app-dark .bg-slate-50 { background-color: #273449 !important; }
+.app-dark .bg-slate-100 { background-color: #374151 !important; }
+.app-dark .text-slate-900,
+.app-dark .text-slate-800,
+.app-dark .text-slate-700,
+.app-dark .text-slate-600 { color: #e5e7eb !important; }
+.app-dark .text-slate-500,
+.app-dark .text-slate-400 { color: #aab6c7 !important; }
+.app-dark .border-slate-100,
+.app-dark .border-slate-200,
+.app-dark .border-slate-300 { border-color: #3c4a5e !important; }
+.app-dark .divide-slate-100 > :not(:first-child) { border-color: #3c4a5e !important; }
+.app-dark input,
+.app-dark select,
+.app-dark textarea { background-color: #273449; color: #e5e7eb; }
+.app-dark input::placeholder { color: #aab6c7; }
+.app-dark .hover\:bg-slate-50:hover { background-color: #273449 !important; }
+
+.glass-nav {
+  border: 1px solid rgb(255 255 255 / 70%);
+  background: rgb(255 255 255 / 68%);
+  box-shadow: 0 10px 32px rgb(15 23 42 / 9%), inset 0 1px rgb(255 255 255 / 75%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+  scrollbar-width: none;
+}
+
+.glass-nav::-webkit-scrollbar { display: none; }
+.glass-nav-active { background: rgb(255 255 255 / 90%); color: var(--hh-primary); box-shadow: 0 1px 5px rgb(15 23 42 / 12%); }
+.glass-nav-idle { color: #475569; }
+.glass-nav-idle:hover { background: rgb(255 255 255 / 50%); }
+.app-dark .glass-nav { border-color: rgb(148 163 184 / 20%); background: rgb(31 41 55 / 78%); box-shadow: 0 10px 32px rgb(0 0 0 / 24%), inset 0 1px rgb(255 255 255 / 7%); }
+.app-dark .glass-nav-active { background: rgb(71 85 105 / 78%); color: #a7f3d0; }
+.app-dark .glass-nav-idle { color: #cbd5e1; }
+.app-dark .glass-nav-idle:hover { background: rgb(71 85 105 / 42%); }
+.household-info-card { border-color: rgb(226 232 240 / 80%); }
+.app-dark .household-info-card { border-color: rgb(71 85 105 / 80%); background: rgb(31 41 55 / 80%); }
+.app-dark .rounded-2xl.border-slate-200:hover,
+.app-dark .rounded-xl.border-slate-100:hover,
+.app-dark .rounded-xl.border-slate-200:hover,
+.app-dark .household-info-card:hover { border-color: #2c8176; box-shadow: 0 8px 22px rgb(0 0 0 / 20%); }
+
+@keyframes investment-series-in {
+  from { opacity: 0.15; stroke-dashoffset: 18; }
+  to { opacity: 1; stroke-dashoffset: 0; }
+}
+
+.investment-chart-line { animation: investment-series-in 700ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .investment-chart-line { animation: none; }
 }
