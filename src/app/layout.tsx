@@ -6,6 +6,13 @@ export const metadata: Metadata = {
   description: "Manage your household finances together.",
   icons: {
     icon: "/householdhq-icon.svg",
+    apple: "/apple-touch-icon.png",
+  },
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "HouseholdHQ",
+    statusBarStyle: "default",
   },
 };
 

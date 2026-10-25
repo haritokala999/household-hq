@@ -2,7 +2,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createEmailAccount,
@@ -42,6 +42,21 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const authPanelRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!showAuth || !authPanelRef.current) return;
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const frame = requestAnimationFrame(() => {
+      const panelTop = authPanelRef.current?.getBoundingClientRect().top;
+      if (panelTop === undefined) return;
+      window.scrollTo({
+        top: window.scrollY + panelTop,
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showAuth]);
 
   useEffect(() => {
     let isMounted = true;
@@ -201,7 +216,7 @@ export default function LoginPage() {
           <div aria-hidden="true" className="signin-brand-orb signin-brand-orb-two" />
         </section>
 
-        {showAuth && <section className="signin-auth-panel relative z-10 w-full p-6 sm:p-8 lg:p-10">
+        {showAuth && <section ref={authPanelRef} className="signin-auth-panel relative z-10 w-full p-6 sm:p-8 lg:p-10">
           <button
             type="button"
             onClick={() => setShowAuth(false)}

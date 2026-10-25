@@ -60,16 +60,14 @@ textarea:focus-visible {
 
 .app-shell .rounded-2xl.border-slate-200,
 .app-shell .rounded-xl.border-slate-100,
-.app-shell .rounded-xl.border-slate-200,
-.app-shell .household-info-card {
+.app-shell .rounded-xl.border-slate-200 {
   transition: border-color 180ms ease, box-shadow 180ms ease,
     transform 180ms ease;
 }
 
 .app-shell .rounded-2xl.border-slate-200:hover,
 .app-shell .rounded-xl.border-slate-100:hover,
-.app-shell .rounded-xl.border-slate-200:hover,
-.app-shell .household-info-card:hover {
+.app-shell .rounded-xl.border-slate-200:hover {
   border-color: var(--hh-border-hover);
   box-shadow: 0 8px 22px rgb(15 118 110 / 8%);
   transform: translateY(-2px);
@@ -80,8 +78,7 @@ textarea:focus-visible {
   a,
   .app-shell .rounded-2xl.border-slate-200,
   .app-shell .rounded-xl.border-slate-100,
-  .app-shell .rounded-xl.border-slate-200,
-  .app-shell .household-info-card {
+  .app-shell .rounded-xl.border-slate-200 {
     transition-duration: 0.01ms !important;
   }
 
@@ -89,8 +86,7 @@ textarea:focus-visible {
   button:not(:disabled):active,
   .app-shell .rounded-2xl.border-slate-200:hover,
   .app-shell .rounded-xl.border-slate-100:hover,
-  .app-shell .rounded-xl.border-slate-200:hover,
-  .app-shell .household-info-card:hover {
+  .app-shell .rounded-xl.border-slate-200:hover {
     transform: none;
   }
 }
@@ -178,13 +174,11 @@ textarea:focus-visible {
 .app-dark [class*="border-blue-"],
 .app-dark [class*="border-sky-"] { border-color: #526176 !important; }
 .app-dark .workspace-nav { background-color: rgb(31 41 55 / 96%); }
-.app-dark .household-info-card { background-color: #1f2937 !important; }
 .app-dark .investment-chart-container { background-color: #1f2937 !important; }
 .app-dark .dashboard-insights-chart [class~="bg-amber-500"],
 .app-dark .dashboard-insights-chart [class~="bg-amber-600"] { background-color: #fbbf24 !important; }
 .app-dark .dashboard-insights-chart [class~="bg-emerald-600"],
 .app-dark .dashboard-insights-chart [class~="bg-emerald-700"] { background-color: #34d399 !important; }
-.app-dark .app-shell header { background-color: rgb(17 24 39 / 96%) !important; }
 .app-dark .glass-nav-item > span { background-color: #374151; color: #cbd5e1; }
 .app-dark .glass-nav-item[aria-current="page"] > span { background-color: #134e4a; color: #a7f3d0; }
 .app-dark .investment-chart-container { background-color: #1f2937; }
@@ -195,10 +189,8 @@ textarea:focus-visible {
 
 .glass-nav {
   border: 1px solid rgb(255 255 255 / 70%);
-  background: rgb(255 255 255 / 68%);
-  box-shadow: 0 10px 32px rgb(15 23 42 / 9%), inset 0 1px rgb(255 255 255 / 75%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
-  backdrop-filter: blur(22px) saturate(160%);
+  background: rgb(255 255 255 / 97%);
+  box-shadow: 0 8px 24px rgb(15 23 42 / 10%), inset 0 1px rgb(255 255 255 / 85%);
   scrollbar-width: none;
 }
 
@@ -206,6 +198,51 @@ textarea:focus-visible {
 .glass-nav-active { background: rgb(255 255 255 / 90%); color: var(--hh-primary); box-shadow: 0 1px 5px rgb(15 23 42 / 12%); }
 .glass-nav-idle { color: #475569; }
 .glass-nav-idle:hover { background: rgb(255 255 255 / 50%); }
+
+@media (max-width: 767px) {
+  .workspace-nav .mobile-workspace-nav-item { display: inline-flex; }
+  .workspace-nav .desktop-workspace-nav-item { display: none; }
+
+  .workspace-nav .mobile-dashboard-nav {
+    z-index: 1;
+    flex: 1.35 1 0%;
+    transform: translateY(-0.55rem);
+    border-radius: 1rem;
+    background: #0f766e;
+    color: #fff;
+    box-shadow: 0 8px 20px rgb(15 118 110 / 32%);
+    padding: 0.7rem 0.35rem;
+  }
+
+  .workspace-nav .mobile-dashboard-nav > span:first-child {
+    height: 2.25rem;
+    width: 2.25rem;
+    background: rgb(255 255 255 / 18%) !important;
+    color: #fff !important;
+  }
+
+  .workspace-nav .mobile-dashboard-nav.glass-nav-active {
+    background: #0f766e;
+    color: #fff;
+  }
+}
+
+@media (min-width: 768px) {
+  .workspace-nav .mobile-workspace-nav-item { display: none; }
+  .workspace-nav .desktop-workspace-nav-item { display: inline-flex; }
+}
+
+.app-dark .workspace-nav .mobile-dashboard-nav,
+.app-dark .workspace-nav .mobile-dashboard-nav.glass-nav-active {
+  background: #0f766e;
+  color: #fff;
+}
+
+.app-dark .workspace-nav .mobile-dashboard-nav > span:first-child {
+  background: rgb(255 255 255 / 18%) !important;
+  color: #fff !important;
+}
+
 .edit-focus-highlight {
   animation: edit-focus-pulse 1.2s ease-in-out 2;
 }
@@ -400,10 +437,20 @@ textarea:focus-visible {
 }
 
 @media (max-width: 1023px) {
+  html:has(.signin-screen),
+  body:has(.signin-screen) {
+    scrollbar-width: none;
+  }
+
+  html:has(.signin-screen)::-webkit-scrollbar,
+  body:has(.signin-screen)::-webkit-scrollbar {
+    display: none;
+  }
+
   .signin-screen {
     height: auto;
     min-height: 100svh;
-    overflow-x: hidden;
+    overflow-x: clip;
     overflow-y: visible;
   }
 
@@ -508,16 +555,13 @@ textarea:focus-visible {
   }
 }
 
-.app-dark .glass-nav { border-color: rgb(148 163 184 / 20%); background: rgb(31 41 55 / 78%); box-shadow: 0 10px 32px rgb(0 0 0 / 24%), inset 0 1px rgb(255 255 255 / 7%); }
+.app-dark .glass-nav { border-color: rgb(148 163 184 / 30%); background: rgb(31 41 55 / 98%); box-shadow: 0 8px 24px rgb(0 0 0 / 28%), inset 0 1px rgb(255 255 255 / 7%); }
 .app-dark .glass-nav-active { background: rgb(71 85 105 / 78%); color: #a7f3d0; }
 .app-dark .glass-nav-idle { color: #cbd5e1; }
 .app-dark .glass-nav-idle:hover { background: rgb(71 85 105 / 42%); }
-.household-info-card { border-color: rgb(226 232 240 / 80%); }
-.app-dark .household-info-card { border-color: rgb(71 85 105 / 80%); background: rgb(31 41 55 / 80%); }
 .app-dark .rounded-2xl.border-slate-200:hover,
 .app-dark .rounded-xl.border-slate-100:hover,
-.app-dark .rounded-xl.border-slate-200:hover,
-.app-dark .household-info-card:hover { border-color: #2c8176; box-shadow: 0 8px 22px rgb(0 0 0 / 20%); }
+.app-dark .rounded-xl.border-slate-200:hover { border-color: #2c8176; box-shadow: 0 8px 22px rgb(0 0 0 / 20%); }
 
 @keyframes investment-series-in {
   from { opacity: 0.15; stroke-dashoffset: 18; }

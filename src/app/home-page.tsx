@@ -73,10 +73,7 @@ type AppNotification = {
 };
 type CelebrationKind = "goal" | "budget" | "income" | "transfer";
 type Celebration = { id: number; kind: CelebrationKind };
-const sections: Section[] = ["Dashboard", "Transactions", "Budgets", "Goals", "Investments", "Household"];
-const inputClass = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-600";
-const buttonClass = "rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60";
-const secondaryButtonClass = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800";
+const workspaceSections: Section[] = ["Dashboard", "Transactions", "Budgets", "Goals", "Investments"];
 const currencyFlags: Record<HouseholdCurrency, string> = {
   USD: "🇺🇸",
   CAD: "🇨🇦",
@@ -86,7 +83,9 @@ const currencyFlags: Record<HouseholdCurrency, string> = {
   SAR: "🇸🇦",
   KWD: "🇰🇼",
 };
-
+const inputClass = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-600";
+const buttonClass = "rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60";
+const secondaryButtonClass = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800";
 const emptyFinance: HouseholdFinanceData = {
   accounts: [], categories: [], transactions: [], budgets: [], goals: [], assets: [], liabilities: [], recurringPayments: [],
 };
@@ -113,18 +112,10 @@ function useEditFocus<T extends HTMLElement>(targetKey: boolean | string | undef
   return ref;
 }
 
-function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return <button type="button" aria-label={open ? "Collapse sidebar" : "Expand sidebar"} aria-expanded={open} title={open ? "Collapse sidebar" : "Expand sidebar"} onClick={onToggle} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 md:w-full md:justify-start">
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M14 9h4M14 13h4" /></svg>
-    <span className="md:sr-only">{open ? "Collapse menu" : "Expand menu"}</span>
-  </button>;
-}
-
 export default function Home() {
   const router = useRouter();
   const { uid, households, activeHouseholdId, loading: householdsLoading, error: householdError, retry, refreshHouseholds, selectHousehold } = useHouseholds();
   const [section, setSection] = useState<Section>("Dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [finance, setFinance] = useState<HouseholdFinanceData>(emptyFinance);
   const [members, setMembers] = useState<HouseholdMember[]>([]);
   const [loadingFinance, setLoadingFinance] = useState(false);
@@ -135,6 +126,7 @@ export default function Home() {
   const [celebration, setCelebration] = useState<Celebration>();
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const notificationSequence = useRef(0);
   const celebrationSequence = useRef(0);
   const activityHouseholdRef = useRef<string | undefined>(undefined);
@@ -148,16 +140,19 @@ export default function Home() {
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | undefined>();
   const [snapshotHistory, setSnapshotHistory] = useState<Record<string, AccountSnapshot[]>>({});
   const [invitation, setInvitation] = useState<{ code: string; uid: string; householdId: string } | null>(null);
-  const [editingHouseholdName, setEditingHouseholdName] = useState(false);
-  const [householdNameDraft, setHouseholdNameDraft] = useState("");
-  const [savingHouseholdName, setSavingHouseholdName] = useState(false);
-  const [householdNameError, setHouseholdNameError] = useState("");
   const [transferringOwnership, setTransferringOwnership] = useState(false);
   const [promotingMember, setPromotingMember] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
   const selectedHousehold = households.find((item) => item.householdId === activeHouseholdId)
     ?? (households.length === 1 ? households[0] : undefined);
+  const currentMember = members.find((member) => member.uid === uid);
+  const profileName = auth.currentUser?.displayName
+    || currentMember?.displayName
+    || auth.currentUser?.email?.split("@")[0]
+    || "Account";
+  const profileEmail = auth.currentUser?.email || currentMember?.email || "";
+  const profileInitials = profileName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const householdId = selectedHousehold?.householdId;
   const invitationCode = invitation?.uid === uid
     && invitation.householdId === householdId
@@ -331,29 +326,11 @@ export default function Home() {
     }
   }
 
-  function startEditingHouseholdName() {
-    if (!selectedHousehold) return;
-    setHouseholdNameDraft(selectedHousehold.householdName);
-    setHouseholdNameError("");
-    setEditingHouseholdName(true);
-    requestAnimationFrame(() => focusEditTarget(document.getElementById("household-name-editor")));
-  }
-
-  async function handleRenameHousehold(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleRenameHousehold(householdName: string) {
     if (!householdId) return;
-    setSavingHouseholdName(true);
-    setHouseholdNameError("");
-    try {
-      await renameHousehold(householdId, householdNameDraft);
-      await recordActivityForHousehold(householdId, `Renamed the household to ${householdNameDraft.trim()}.`);
-      setEditingHouseholdName(false);
-      await retry();
-    } catch (cause) {
-      setHouseholdNameError(cause instanceof Error ? cause.message : "Could not rename the household.");
-    } finally {
-      setSavingHouseholdName(false);
-    }
+    await renameHousehold(householdId, householdName);
+    await recordActivityForHousehold(householdId, `Renamed the household to ${householdName.trim()}.`);
+    await retry();
   }
 
   async function handleTransferOwnership(newOwnerUid: string, newOwnerName: string) {
@@ -462,6 +439,24 @@ export default function Home() {
     addNotification("You joined the household.");
   }
 
+  function renderWorkspaceItem(item: Section, visibilityClass: string) {
+    const active = section === item;
+    return (
+      <button
+        key={`${visibilityClass}-${item}`}
+        type="button"
+        aria-current={active ? "page" : undefined}
+        onClick={() => setSection(item)}
+        className={`glass-nav-item group inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium leading-none transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 sm:text-[11px] md:flex-none md:flex-row md:gap-2 md:rounded-full md:px-5 md:py-2.5 md:text-sm md:leading-normal ${visibilityClass} ${item === "Dashboard" && visibilityClass === "mobile-workspace-nav-item" ? "mobile-dashboard-nav" : ""} ${active ? "glass-nav-active" : "glass-nav-idle"}`}
+      >
+        <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors duration-200 md:h-9 md:w-9 ${active ? "bg-teal-100 text-teal-800" : "bg-slate-100/80 text-slate-500 group-hover:bg-teal-50 group-hover:text-teal-700"}`}>
+          <WorkspaceIcon section={item} />
+        </span>
+        <span>{item}</span>
+      </button>
+    );
+  }
+
   if (householdsLoading) {
     return <AuthGuard><LoadingPanel label="Loading your household…" /></AuthGuard>;
   }
@@ -485,27 +480,13 @@ export default function Home() {
 
   return (
     <AuthGuard>
-      <main className={`app-shell min-h-screen bg-[#f3f7f5] text-slate-900 md:flex ${darkMode ? "app-dark" : ""}`}>
-        <aside className={`sticky top-0 z-30 flex w-full shrink-0 flex-col border-b border-slate-200 bg-white md:h-screen md:self-start md:border-b-0 md:border-r ${sidebarOpen ? "md:w-64" : "md:w-20"}`}>
-          <Link href="/" onClick={() => setSection("Dashboard")} aria-label="HouseholdHQ dashboard home" title="Go to Dashboard" className={`flex min-h-20 items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${sidebarOpen ? "gap-3 px-6 py-5" : "justify-center px-3 py-5"}`}><Image src="/householdhq-icon.svg" alt="" width={40} height={40} priority className="h-10 w-10 shrink-0 rounded-xl object-contain" />{sidebarOpen && <div><p className="text-lg font-bold tracking-tight">HouseholdHQ</p><p className="text-xs text-slate-500">One home. One financial plan.</p></div>}</Link>
-          {sidebarOpen && <div className="px-4 pb-4">
-              <div className="household-info-card w-full max-w-sm rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur-xl">
-                <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Household</p><span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-800">Current</span></div>
-                {editingHouseholdName ? <form id="household-name-editor" onSubmit={handleRenameHousehold} className="edit-focus-target mt-2 space-y-2"><input autoFocus required maxLength={80} aria-label="Household name" value={householdNameDraft} onChange={(event) => setHouseholdNameDraft(event.target.value)} className={inputClass} /><div className="flex gap-2"><button disabled={savingHouseholdName} className={`${buttonClass} px-3 py-2`}>{savingHouseholdName ? "Saving…" : "Save"}</button><button type="button" disabled={savingHouseholdName} onClick={() => { setEditingHouseholdName(false); setHouseholdNameError(""); }} className={secondaryButtonClass}>Cancel</button></div>{householdNameError && <p role="alert" className="text-xs text-red-700">{householdNameError}</p>}</form> : <div className="mt-1 flex items-center gap-2">{households.length > 1 ? <select aria-label="Active household" value={householdId} onChange={(event) => selectHousehold(event.target.value)} className="min-w-0 flex-1 bg-transparent font-semibold">{households.map((item) => <option key={item.householdId} value={item.householdId}>{item.householdName}</option>)}</select> : <p className="min-w-0 flex-1 truncate font-semibold">{selectedHousehold?.householdName}</p>}{selectedHousehold?.role === "owner" && <button type="button" aria-label={`Edit ${selectedHousehold.householdName}`} title={`Edit ${selectedHousehold.householdName}`} onClick={startEditingHouseholdName} className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-50 hover:text-emerald-800">Edit</button>}</div>}
-                <p className="mt-1 text-xs text-slate-500">{members.length} members · <span aria-label={HOUSEHOLD_CURRENCY_NAMES[currency]} title={HOUSEHOLD_CURRENCY_NAMES[currency]}>{currencyFlags[currency]} {currency}</span></p>
-              </div>
-          </div>}
-
-
-          <div className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-3 z-50 md:hidden"><SidebarToggle open={sidebarOpen} onToggle={() => setSidebarOpen((open) => !open)} /></div>
-          <div className="mt-auto hidden p-4 md:flex md:flex-col md:gap-3">{sidebarOpen && <><div className="rounded-xl bg-slate-900 p-4 text-white"><p className="text-sm font-semibold">Your finances, together</p><p className="mt-1 text-xs leading-5 text-slate-300">Balances are entered manually. Transactions help you plan; they never change account balances.</p></div><p className="text-xs text-slate-400">HouseholdHQ · Shared workspace</p></>}<SidebarToggle open={sidebarOpen} onToggle={() => setSidebarOpen((open) => !open)} /></div>
-        </aside>
-
-        <section className="min-w-0 flex-1">
-          <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur-xl sm:px-8 sm:py-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <h1 className="text-xl font-bold tracking-tight">{section === "Dashboard" ? "Dashboard" : section}</h1>
-            </div>
+      <main className={`app-shell min-h-screen bg-[#f3f7f5] text-slate-900 ${darkMode ? "app-dark" : ""}`}>
+        <section className="min-w-0">
+          <header className="flex items-center justify-between gap-4 px-4 py-3 sm:px-8 sm:py-4">
+            <Link href="/" onClick={() => setSection("Dashboard")} aria-label="HouseholdHQ dashboard home" title="Go to Dashboard" className="flex min-h-11 min-w-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">
+              <Image src="/householdhq-icon.svg" alt="" width={48} height={48} priority className="h-12 w-12 shrink-0 rounded-xl object-contain" />
+              <span className="truncate text-base font-bold tracking-tight sm:text-lg">HouseholdHQ</span>
+            </Link>
             <div className="flex items-center gap-2">
               {signOutError && <span role="alert" className="text-sm text-red-700">{signOutError}</span>}
               <div className="relative">
@@ -561,52 +542,48 @@ export default function Home() {
                   </> : householdActivity.length === 0 && <p className="mt-3 text-sm text-slate-500">You’re all caught up.</p>}
                 </div>}
               </div>
-              <button
-                type="button"
-                aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-                aria-pressed={darkMode}
-                title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-                onClick={toggleTheme}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
-              >
-                {darkMode
-                  ? <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg>
-                  : <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z" /></svg>}
-                <span className="text-xs font-semibold">{darkMode ? "Light" : "Dark"}</span>
-              </button>
-              <button
-                type="button"
-                aria-label={signingOut ? "Signing out" : "Sign out"}
-                title={signingOut ? "Signing out" : "Sign out"}
-                disabled={signingOut}
-                onClick={handleSignOut}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 disabled:opacity-60"
-              >
-                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M10 17l5-5-5-5M15 12H3" />
-                  <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" />
-                </svg>
-              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  aria-label="Profile menu"
+                  aria-expanded={showProfileMenu}
+                  aria-haspopup="true"
+                  title="Profile and settings"
+                  onClick={() => setShowProfileMenu((open) => !open)}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-slate-200 bg-white py-1 pl-1 pr-2 text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 sm:h-11 sm:pl-1.5 sm:pr-3"
+                >
+                  <span aria-hidden="true" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-teal-700 text-xs font-semibold text-white">{profileInitials}</span>
+                  <span className="hidden max-w-32 truncate text-sm font-semibold sm:inline">{profileName}</span>
+                  <svg aria-hidden="true" viewBox="0 0 20 20" className="hidden h-4 w-4 text-slate-400 sm:block" fill="currentColor"><path fillRule="evenodd" d="M5.22 7.47a.75.75 0 0 1 1.06 0L10 11.19l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
+                </button>
+                {showProfileMenu && <div role="menu" aria-label="Profile and settings" className="absolute right-0 z-40 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 text-slate-900 shadow-xl">
+                  <div className="px-3 py-2.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Signed in as</p>
+                    <p className="mt-1 truncate text-sm font-semibold">{profileName}</p>
+                    {profileEmail && <p className="mt-0.5 truncate text-xs text-slate-500">{profileEmail}</p>}
+                  </div>
+                  <div className="my-1 border-t border-slate-200" />
+                  <button type="button" role="menuitem" onClick={() => { setSection("Household"); setShowProfileMenu(false); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium hover:bg-slate-50">
+                    <WorkspaceIcon section="Household" />Household
+                  </button>
+                  <button type="button" role="menuitem" aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium hover:bg-slate-50">
+                    {darkMode
+                      ? <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg></span>
+                      : <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z" /></svg></span>}
+                    <span className="sr-only">{darkMode ? "Switch to light mode" : "Switch to dark mode"}</span>
+                  </button>
+                  <div className="my-1 border-t border-slate-200" />
+                  <button type="button" role="menuitem" disabled={signingOut} onClick={() => { setShowProfileMenu(false); void handleSignOut(); }} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition disabled:opacity-60 ${darkMode ? "bg-red-950/70 text-red-200 hover:bg-red-900" : "text-red-700 hover:bg-red-50"}`}>
+                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" /></svg>
+                    {signingOut ? "Signing out…" : "Sign out"}
+                  </button>
+                </div>}
+              </div>
             </div>
           </header>
-          <nav aria-label="Workspace" className="workspace-nav glass-nav fixed inset-x-0 bottom-0 z-40 mx-0 flex w-full max-w-none justify-around gap-1 rounded-none rounded-t-2xl p-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:sticky md:inset-x-auto md:top-2 md:bottom-auto md:mx-auto md:my-4 md:w-fit md:max-w-[calc(100%-2rem)] md:justify-start md:rounded-full md:p-1.5">
-            {sections.map((item) => {
-              const active = section === item;
-              return (
-                <button
-                  key={item}
-                  type="button"
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => setSection(item)}
-                  className={`glass-nav-item group inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[9px] font-medium leading-none transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 sm:text-[10px] md:flex-none md:flex-row md:gap-2 md:rounded-full md:px-4 md:py-2 md:text-sm md:leading-normal ${active ? "glass-nav-active" : "glass-nav-idle"}`}
-                >
-                  <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors duration-200 ${active ? "bg-teal-100 text-teal-800" : "bg-slate-100/80 text-slate-500 group-hover:bg-teal-50 group-hover:text-teal-700"}`}>
-                    <WorkspaceIcon section={item} />
-                  </span>
-                  <span>{item}</span>
-                </button>
-              );
-            })}
+          <nav aria-label="Workspace" className="workspace-nav glass-nav fixed inset-x-0 bottom-0 z-40 mx-0 flex w-full max-w-none justify-around gap-1 rounded-none rounded-t-2xl p-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:sticky md:inset-x-auto md:top-4 md:bottom-auto md:mx-auto md:mb-4 md:mt-0 md:w-fit md:max-w-[calc(100%-2rem)] md:justify-start md:rounded-full md:p-2">
+            {(["Transactions", "Budgets", "Dashboard", "Goals", "Investments"] as const).map((item) => renderWorkspaceItem(item, "mobile-workspace-nav-item"))}
+            {workspaceSections.map((item) => renderWorkspaceItem(item, "desktop-workspace-nav-item"))}
           </nav>
           <div className="mx-auto max-w-7xl space-y-6 px-4 pb-24 pt-5 sm:px-8 sm:pt-8 md:pb-8">
             {financeError && <ErrorPanel message={financeError} onRetry={refresh} />}
@@ -627,7 +604,7 @@ export default function Home() {
                   return runAction(() => addGoalProgress(db, householdId!, goalId, amountMinor), completesGoal ? "Goal achieved — congratulations!" : "Goal progress updated.", onSuccess, completesGoal ? "goal" : undefined);
                 }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.")} editing={editingGoal} setEditing={setEditingGoal} />}
                 {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} darkMode={darkMode} snapshots={snapshotHistory} onSaveAccount={(input) => runAction(async () => { const accountId = await saveAccount(db, householdId!, uid!, currency, input); const thisMonth = currentMonthKey(); if (!(snapshotHistory[accountId] ?? []).some((snapshot) => snapshot.month === thisMonth)) await addAccountSnapshot(db, householdId!, accountId, uid!, thisMonth, input.balanceMinor); }, "Account added.")} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.")} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.")} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`)} />}
-                {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} onSelectHousehold={selectHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
+                {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} onSelectHousehold={selectHousehold} onRenameHousehold={handleRenameHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
               </>
             )}
 
@@ -1504,12 +1481,13 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   </div>;
 }
 
-function HouseholdSection({ householdName, uid, households, activeHouseholdId, onSelectHousehold, onCreateHousehold, onJoinHousehold, isOwner, members, invitationCode, onInvite, onPromoteMember, onTransferOwnership, updatingOwnership }: {
+function HouseholdSection({ householdName, uid, households, activeHouseholdId, onSelectHousehold, onRenameHousehold, onCreateHousehold, onJoinHousehold, isOwner, members, invitationCode, onInvite, onPromoteMember, onTransferOwnership, updatingOwnership }: {
   householdName: string;
   uid: string;
   households: HouseholdMembership[];
   activeHouseholdId: string;
   onSelectHousehold: (householdId: string) => void;
+  onRenameHousehold: (name: string) => Promise<void>;
   onCreateHousehold: (name: string, currency: HouseholdCurrency) => Promise<void>;
   onJoinHousehold: (code: string) => Promise<void>;
   isOwner: boolean;
@@ -1526,7 +1504,25 @@ function HouseholdSection({ householdName, uid, households, activeHouseholdId, o
   const [invitationToJoin, setInvitationToJoin] = useState("");
   const [householdAction, setHouseholdAction] = useState<"create" | "join" | null>(null);
   const [householdActionError, setHouseholdActionError] = useState("");
+  const [editingHouseholdName, setEditingHouseholdName] = useState(false);
+  const [householdNameDraft, setHouseholdNameDraft] = useState(householdName);
+  const [savingHouseholdName, setSavingHouseholdName] = useState(false);
+  const [householdNameError, setHouseholdNameError] = useState("");
   async function copyCode() { try { await navigator.clipboard.writeText(invitationCode); setCopied(true); } catch { setCopied(false); } }
+
+  async function renameCurrentHousehold(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingHouseholdName(true);
+    setHouseholdNameError("");
+    try {
+      await onRenameHousehold(householdNameDraft);
+      setEditingHouseholdName(false);
+    } catch (cause) {
+      setHouseholdNameError(cause instanceof Error ? cause.message : "Could not rename the household.");
+    } finally {
+      setSavingHouseholdName(false);
+    }
+  }
 
   async function createAnotherHousehold(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1565,10 +1561,19 @@ function HouseholdSection({ householdName, uid, households, activeHouseholdId, o
           {households.map((household) => {
             const active = household.householdId === activeHouseholdId;
             return (
-              <article key={household.householdId} className={`flex items-center justify-between gap-3 rounded-xl border p-4 ${active ? "border-teal-300 bg-teal-50/70" : "border-slate-200"}`}>
+              <article key={household.householdId} className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 ${active ? "border-teal-300 bg-teal-50/70" : "border-slate-200"}`}>
                 <div className="min-w-0">
-                  <p className="truncate font-semibold">{household.householdName}</p>
-                  <p className="mt-1 text-xs text-slate-500">{household.role === "owner" ? "Owner" : "Member"} · {household.currency}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="truncate font-semibold">{household.householdName}</p>
+                    {active && household.role === "owner" && !editingHouseholdName && <button type="button" onClick={() => { setHouseholdNameDraft(household.householdName); setHouseholdNameError(""); setEditingHouseholdName(true); }} className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-teal-800">Rename</button>}
+                  </div>
+                  <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">{household.role === "owner" ? "Owner" : "Member"} · <span aria-label={HOUSEHOLD_CURRENCY_NAMES[household.currency]} title={HOUSEHOLD_CURRENCY_NAMES[household.currency]}>{currencyFlags[household.currency]} {household.currency}</span></p>
+                  {active && household.role === "owner" && editingHouseholdName && <form id="household-name-editor" onSubmit={renameCurrentHousehold} className="mt-3 flex flex-wrap items-center gap-2">
+                    <input autoFocus required maxLength={80} aria-label="Household name" value={householdNameDraft} onChange={(event) => setHouseholdNameDraft(event.target.value)} className={`${inputClass} min-w-40 flex-1`} />
+                    <button disabled={savingHouseholdName} className={`${buttonClass} px-3 py-2`}>{savingHouseholdName ? "Saving…" : "Save"}</button>
+                    <button type="button" disabled={savingHouseholdName} onClick={() => { setEditingHouseholdName(false); setHouseholdNameError(""); }} className={secondaryButtonClass}>Cancel</button>
+                    {householdNameError && <p role="alert" className="basis-full text-xs text-red-700">{householdNameError}</p>}
+                  </form>}
                 </div>
                 <button type="button" disabled={active} onClick={() => onSelectHousehold(household.householdId)} className={active ? "shrink-0 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white" : `${secondaryButtonClass} shrink-0`}>
                   {active ? "Current" : "Switch"}
