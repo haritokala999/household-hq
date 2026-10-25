@@ -79,9 +79,10 @@ service cloud.firestore {
 
     function validHouseholdIndex(data, householdId) {
       return data.keys().hasAll(['householdId', 'createdAt'])
-        && data.keys().hasOnly(['householdId', 'createdAt'])
+        && data.keys().hasOnly(['householdId', 'createdAt', 'lastSeenAt'])
         && data.householdId == householdId
-        && data.createdAt == request.time;
+        && data.createdAt == request.time
+        && (!('lastSeenAt' in data) || data.lastSeenAt == request.time);
     }
 
     function validCategory(data, createdBy) {
@@ -239,6 +240,7 @@ service cloud.firestore {
     function validTransactionCategory(category) {
       return category in [
         'Paycheck',
+        'Paycheck transfer',
         'Groceries',
         'Housing & utilities',
         'Shopping',
@@ -255,17 +257,28 @@ service cloud.firestore {
     function validBudgetCategory(category) {
       return validTransactionCategory(category)
         && category != 'Paycheck'
+        && category != 'Paycheck transfer'
         && category != 'Savings and expenses';
     }
 
     function validTransaction(data, householdId, uid, isCreate) {
       return data.keys().hasAll(['type', 'purpose', 'transferDestination', 'category', 'description', 'amountMinor', 'date', 'accountId', 'ownerUid', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['type', 'purpose', 'transferDestination', 'category', 'description', 'amountMinor', 'date', 'accountId', 'ownerUid', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['type', 'purpose', 'transferDestination', 'category', 'description', 'amountMinor', 'date', 'accountId', 'sourceAccountId', 'ledgerApplied', 'ownerUid', 'createdBy', 'createdAt', 'updatedAt'])
         && data.type in ['credit', 'debit', 'transfer']
         && data.purpose in ['income', 'ordinary', 'investment']
         && ((data.type == 'credit' && data.purpose == 'income' && data.transferDestination == null)
           || (data.type == 'debit' && data.purpose in ['ordinary', 'investment'] && data.transferDestination == null)
-          || (data.type == 'transfer' && data.purpose == 'investment' && data.transferDestination in ['brokerage', 'cash']))
+          || (data.type == 'transfer' && data.purpose == 'investment'
+            && data.transferDestination in ['brokerage', 'retirement', 'cash']
+            && data.accountId is string
+            && data.ledgerApplied == true
+            && get(/databases/$(database)/documents/households/$(householdId)/accounts/$(data.accountId)).data.kind
+              == (data.transferDestination == 'brokerage' ? 'brokerage' : data.transferDestination == 'retirement' ? 'retirement' : 'savings')
+            && (((!('sourceAccountId' in data) || data.sourceAccountId == null) && data.category == 'Paycheck transfer')
+              || (data.sourceAccountId is string
+                && data.accountId != data.sourceAccountId
+                && exists(/databases/$(database)/documents/households/$(householdId)/accounts/$(data.sourceAccountId))
+                && data.category in ['Paycheck transfer', 'Savings and expenses']))))
         && (validTransactionCategory(data.category)
           || (!isCreate && data.category == resource.data.category))
         && (data.description is string && data.description.size() <= 240)
@@ -273,6 +286,10 @@ service cloud.firestore {
         && data.date is string
         && data.date.matches('^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])$')
         && (data.accountId == null || (data.accountId is string && exists(/databases/$(database)/documents/households/$(householdId)/accounts/$(data.accountId))))
+        && (!('sourceAccountId' in data) || data.sourceAccountId == null
+          || (data.sourceAccountId is string && exists(/databases/$(database)/documents/households/$(householdId)/accounts/$(data.sourceAccountId))))
+        && (!('ledgerApplied' in data) || data.ledgerApplied is bool)
+        && (data.type == 'transfer' || !('sourceAccountId' in data) || data.sourceAccountId == null)
         && validOwnerUid(householdId, data.ownerUid)
         && data.createdBy == (isCreate ? uid : resource.data.createdBy)
         && data.createdAt == (isCreate ? request.time : resource.data.createdAt)
@@ -298,10 +315,13 @@ service cloud.firestore {
 
     function validRecurringPayment(data, uid, isCreate) {
       return data.keys().hasAll(['name', 'amountMinor', 'dueDay', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['name', 'amountMinor', 'dueDay', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'amountMinor', 'dueDay', 'frequency', 'monthKey', 'createdBy', 'createdAt', 'updatedAt'])
         && validName(data.name, 80)
         && validAmount(data.amountMinor, false)
         && data.dueDay is int && data.dueDay >= 1 && data.dueDay <= 31
+        && (!('frequency' in data) || data.frequency in ['monthly', 'once'])
+        && (!('monthKey' in data) || (data.monthKey is string && data.monthKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')))
+        && (!('frequency' in data) || data.frequency != 'once' || ('monthKey' in data && data.monthKey is string && data.monthKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')))
         && data.createdBy == (isCreate ? uid : resource.data.createdBy)
         && data.createdAt == (isCreate ? request.time : resource.data.createdAt)
         && data.updatedAt == request.time
@@ -419,6 +439,21 @@ service cloud.firestore {
         allow delete: if isActiveMember(householdId);
       }
 
+      match /activity/{activityId} {
+        allow read: if isActiveMember(householdId);
+        allow create: if isActiveMember(householdId)
+          && request.resource.data.keys().hasAll(['actorUid', 'actorName', 'summary', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['actorUid', 'actorName', 'summary', 'createdAt'])
+          && request.resource.data.actorUid == request.auth.uid
+          && request.resource.data.actorName is string
+          && request.resource.data.actorName.size() <= 80
+          && request.resource.data.summary is string
+          && request.resource.data.summary.matches('.*\\S.*')
+          && request.resource.data.summary.size() <= 180
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
       match /budgets/{budgetId} {
         allow read: if isActiveMember(householdId);
         allow create: if isActiveMember(householdId) && validBudget(request.resource.data, request.auth.uid, true);
@@ -458,7 +493,13 @@ service cloud.firestore {
         && validHouseholdIndex(request.resource.data, householdId)
         && (validInitialIndex(householdId, uid, request.resource.data)
           || validInvitedIndex(uid, householdId));
-      allow update: if false;
+      allow update: if signedIn()
+        && uid == request.auth.uid
+        && isActiveMember(householdId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeenAt'])
+        && request.resource.data.lastSeenAt == request.time
+        && request.resource.data.householdId == resource.data.householdId
+        && request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if isOwner(householdId)
         && uid != request.auth.uid
         && exists(memberPath(householdId, uid))

@@ -114,6 +114,19 @@ function clearPendingCreation(storageKey: string) {
   }
 }
 
+function isPermissionDenied(cause: unknown): boolean {
+  return typeof cause === "object"
+    && cause !== null
+    && "code" in cause
+    && cause.code === "permission-denied";
+}
+
+function permissionDeniedMessage(stage: "create" | "categories") {
+  return stage === "create"
+    ? "Firestore denied household creation. Deploy the current Firestore rules to the Firebase project used by this app, then retry with the same household name and currency."
+    : "The household was created, but Firestore denied default category setup. Deploy the current Firestore rules to the Firebase project used by this app, then retry with the same household name and currency.";
+}
+
 async function findCompletedAttempt(
   uid: string,
   pending: PendingCreation,
@@ -188,10 +201,20 @@ export async function createHousehold(
 
   // A prior commit may have succeeded while its response was lost. Resolve
   // the stable attempt ID before sending the same atomic batch again.
-  if (await findCompletedAttempt(user.uid, pending)) {
-    await ensureDefaultCategories(pending.householdId, user.uid);
-    clearPendingCreation(storageKey);
-    return pending.householdId;
+  try {
+    if (await findCompletedAttempt(user.uid, pending)) {
+      try {
+        await ensureDefaultCategories(pending.householdId, user.uid);
+      } catch (cause) {
+        if (isPermissionDenied(cause)) throw new Error(permissionDeniedMessage("categories"));
+        throw cause;
+      }
+      clearPendingCreation(storageKey);
+      return pending.householdId;
+    }
+  } catch (cause) {
+    if (isPermissionDenied(cause)) throw new Error(permissionDeniedMessage("create"));
+    throw cause;
   }
 
   const batch = writeBatch(db);
@@ -220,19 +243,32 @@ export async function createHousehold(
   } catch (writeError) {
     // Do not rotate the ID after an ambiguous response. A retry first checks
     // this same ID and can safely return the committed household if present.
+    let completedAttempt: boolean;
     try {
-      if (await findCompletedAttempt(user.uid, pending)) {
-        await ensureDefaultCategories(pending.householdId, user.uid);
-        clearPendingCreation(storageKey);
-        return pending.householdId;
-      }
+      completedAttempt = await findCompletedAttempt(user.uid, pending);
     } catch {
       throw new Error("The household creation outcome could not be confirmed. Retry with the same name and currency to check the same request.");
     }
+    if (completedAttempt) {
+      try {
+        await ensureDefaultCategories(pending.householdId, user.uid);
+      } catch (cause) {
+        if (isPermissionDenied(cause)) throw new Error(permissionDeniedMessage("categories"));
+        throw cause;
+      }
+      clearPendingCreation(storageKey);
+      return pending.householdId;
+    }
+    if (isPermissionDenied(writeError)) throw new Error(permissionDeniedMessage("create"));
     throw writeError;
   }
 
-  await ensureDefaultCategories(pending.householdId, user.uid);
+  try {
+    await ensureDefaultCategories(pending.householdId, user.uid);
+  } catch (cause) {
+    if (isPermissionDenied(cause)) throw new Error(permissionDeniedMessage("categories"));
+    throw cause;
+  }
   clearPendingCreation(storageKey);
   return pending.householdId;
 }

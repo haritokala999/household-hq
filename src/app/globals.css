@@ -111,6 +111,7 @@ textarea:focus-visible {
 .app-dark .text-slate-600 { color: #e5e7eb !important; }
 .app-dark .text-slate-500,
 .app-dark .text-slate-400 { color: #aab6c7 !important; }
+.app-dark .text-slate-300 { color: #cbd5e1 !important; }
 .app-dark .border-slate-100,
 .app-dark .border-slate-200,
 .app-dark .border-slate-300 { border-color: #3c4a5e !important; }
@@ -120,6 +121,77 @@ textarea:focus-visible {
 .app-dark textarea { background-color: #273449; color: #e5e7eb; }
 .app-dark input::placeholder { color: #aab6c7; }
 .app-dark .hover\:bg-slate-50:hover { background-color: #273449 !important; }
+.app-dark [class~="bg-white/95"],
+.app-dark [class~="bg-white/90"],
+.app-dark [class~="bg-white/80"] { background-color: rgb(31 41 55 / 96%) !important; }
+.app-dark [class~="bg-slate-50/80"],
+.app-dark [class~="bg-slate-50/70"],
+.app-dark [class~="bg-slate-50/50"] { background-color: #1f2937 !important; }
+.app-dark [class*="bg-emerald-50"],
+.app-dark [class*="bg-emerald-100"],
+.app-dark [class*="bg-green-50"],
+.app-dark [class*="bg-green-100"] { background-color: #12382e !important; }
+.app-dark [class*="bg-teal-50"],
+.app-dark [class*="bg-teal-100"] { background-color: #123b3a !important; }
+.app-dark [class*="bg-red-50"],
+.app-dark [class*="bg-red-100"],
+.app-dark [class*="bg-rose-50"],
+.app-dark [class*="bg-rose-100"] { background-color: #3f242a !important; }
+.app-dark [class*="bg-amber-50"],
+.app-dark [class*="bg-amber-100"],
+.app-dark [class*="bg-orange-50"],
+.app-dark [class*="bg-orange-100"],
+.app-dark [class*="bg-yellow-50"],
+.app-dark [class*="bg-yellow-100"] { background-color: #3b2d1e !important; }
+.app-dark [class*="bg-violet-50"],
+.app-dark [class*="bg-violet-100"],
+.app-dark [class*="bg-purple-50"],
+.app-dark [class*="bg-purple-100"] { background-color: #30264a !important; }
+.app-dark [class*="bg-indigo-50"],
+.app-dark [class*="bg-indigo-100"],
+.app-dark [class*="bg-blue-50"],
+.app-dark [class*="bg-blue-100"],
+.app-dark [class*="bg-sky-50"],
+.app-dark [class*="bg-sky-100"] { background-color: #1e3049 !important; }
+.app-dark [class*="text-red-"],
+.app-dark [class*="text-rose-"] { color: #fda4af !important; }
+.app-dark [class*="text-emerald-"],
+.app-dark [class*="text-green-"] { color: #6ee7b7 !important; }
+.app-dark [class*="text-teal-"] { color: #5eead4 !important; }
+.app-dark [class*="text-amber-"],
+.app-dark [class*="text-orange-"],
+.app-dark [class*="text-yellow-"] { color: #fdba74 !important; }
+.app-dark [class*="text-violet-"],
+.app-dark [class*="text-purple-"] { color: #c4b5fd !important; }
+.app-dark [class*="text-indigo-"] { color: #a5b4fc !important; }
+.app-dark [class*="text-blue-"],
+.app-dark [class*="text-sky-"] { color: #93c5fd !important; }
+.app-dark [class*="border-emerald-"],
+.app-dark [class*="border-teal-"],
+.app-dark [class*="border-red-"],
+.app-dark [class*="border-rose-"],
+.app-dark [class*="border-amber-"],
+.app-dark [class*="border-orange-"],
+.app-dark [class*="border-violet-"],
+.app-dark [class*="border-purple-"],
+.app-dark [class*="border-indigo-"],
+.app-dark [class*="border-blue-"],
+.app-dark [class*="border-sky-"] { border-color: #526176 !important; }
+.app-dark .workspace-nav { background-color: rgb(31 41 55 / 96%); }
+.app-dark .household-info-card { background-color: #1f2937 !important; }
+.app-dark .investment-chart-container { background-color: #1f2937 !important; }
+.app-dark .dashboard-insights-chart [class~="bg-amber-500"],
+.app-dark .dashboard-insights-chart [class~="bg-amber-600"] { background-color: #fbbf24 !important; }
+.app-dark .dashboard-insights-chart [class~="bg-emerald-600"],
+.app-dark .dashboard-insights-chart [class~="bg-emerald-700"] { background-color: #34d399 !important; }
+.app-dark .app-shell header { background-color: rgb(17 24 39 / 96%) !important; }
+.app-dark .glass-nav-item > span { background-color: #374151; color: #cbd5e1; }
+.app-dark .glass-nav-item[aria-current="page"] > span { background-color: #134e4a; color: #a7f3d0; }
+.app-dark .investment-chart-container { background-color: #1f2937; }
+.app-dark .investment-chart-container svg line[stroke="#e2e8f0"] { stroke: #64748b; }
+.app-dark .investment-chart-container svg text { fill: #cbd5e1 !important; }
+.app-dark #investment-chart-detail { border-color: #3c4a5e; background-color: #273449; }
+.app-dark #investment-chart-detail .border-teal-100 { border-color: #3c4a5e; }
 
 .glass-nav {
   border: 1px solid rgb(255 255 255 / 70%);

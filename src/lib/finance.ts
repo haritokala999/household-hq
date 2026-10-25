@@ -5,9 +5,12 @@ import {
   doc,
   getDocs,
   increment,
+  query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
   type Firestore,
 } from "firebase/firestore";
@@ -24,6 +27,7 @@ import type {
 
 export const TRANSACTION_CATEGORIES = [
   "Paycheck",
+  "Paycheck transfer",
   "Groceries",
   "Housing & utilities",
   "Shopping",
@@ -38,7 +42,7 @@ export const TRANSACTION_CATEGORIES = [
 
 export const SAVINGS_CATEGORY = "Savings and expenses";
 export const BUDGET_CATEGORIES = TRANSACTION_CATEGORIES.filter(
-  (category) => category !== "Paycheck" && category !== SAVINGS_CATEGORY,
+  (category) => category !== "Paycheck" && category !== "Paycheck transfer" && category !== SAVINGS_CATEGORY,
 );
 
 export type HouseholdFinanceData = {
@@ -80,15 +84,29 @@ export async function loadHouseholdFinance(
   return { accounts, categories, transactions, budgets, goals, assets, liabilities, recurringPayments };
 }
 
-type RecurringPaymentInput = Pick<RecurringPayment, "name" | "amountMinor" | "dueDay">;
+type RecurringPaymentInput = Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey">;
 
 export async function saveRecurringPayment(database: Firestore, householdId: string, actorUid: string, input: RecurringPaymentInput) {
   const name = input.name.trim();
   if (!name || name.length > 80) throw new Error("Payment names must be 1–80 characters.");
   if (!Number.isInteger(input.dueDay) || input.dueDay < 1 || input.dueDay > 31) throw new Error("Choose a due day from 1 to 31.");
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor < 1) throw new Error("Payment amount must be greater than zero.");
+  const frequency = input.frequency ?? "monthly";
+  if (frequency !== "monthly" && frequency !== "once") throw new Error("Choose a monthly or one-time payment.");
+  if (frequency === "once" && (!input.monthKey || !isMonthKey(input.monthKey))) {
+    throw new Error("Choose the month for this one-time payment.");
+  }
   const reference = doc(collection(database, ...path(householdId, "recurringPayments")));
-  await setDoc(reference, { name, amountMinor: input.amountMinor, dueDay: input.dueDay, createdBy: actorUid, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  await setDoc(reference, {
+    name,
+    amountMinor: input.amountMinor,
+    dueDay: input.dueDay,
+    frequency,
+    ...(frequency === "once" ? { monthKey: input.monthKey } : {}),
+    createdBy: actorUid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
   return reference.id;
 }
 
@@ -212,6 +230,9 @@ export async function saveAccount(
   input: AccountInput,
   existing?: FinancialAccount,
 ) {
+  if (existing && existing.balanceMinor !== input.balanceMinor) {
+    throw new Error("Account balances can only change through a transfer.");
+  }
   positiveMinorAmount(input.balanceMinor, "Balance");
   const reference = existing
     ? doc(database, ...path(householdId, "accounts"), existing.id)
@@ -229,6 +250,17 @@ export async function saveAccount(
 }
 
 export async function deleteAccount(database: Firestore, householdId: string, accountId: string) {
+  const transactions = collection(database, ...path(householdId, "transactions"));
+  const [destinationReferences, sourceReferences] = await Promise.all([
+    getDocs(query(transactions, where("accountId", "==", accountId))),
+    getDocs(query(transactions, where("sourceAccountId", "==", accountId))),
+  ]);
+  if ([...destinationReferences.docs, ...sourceReferences.docs].some((transaction) => {
+    const data = transaction.data();
+    return data.type === "transfer" && data.ledgerApplied === true;
+  })) {
+    throw new Error("Delete transfers linked to this account before deleting the account.");
+  }
   const snapshots = await getDocs(collection(database, ...path(householdId, "accounts"), accountId, "snapshots"));
   for (let index = 0; index < snapshots.docs.length; index += 450) {
     const batch = writeBatch(database);
@@ -253,7 +285,7 @@ export async function addAccountSnapshot(
 }
 
 type TransactionInput = Pick<FinancialTransaction,
-  "type" | "purpose" | "transferDestination" | "category" | "description" | "amountMinor" | "date" | "accountId" | "ownerUid"
+  "type" | "purpose" | "transferDestination" | "category" | "description" | "amountMinor" | "date" | "accountId" | "sourceAccountId" | "ownerUid"
 >;
 
 export async function saveTransaction(
@@ -270,10 +302,21 @@ export async function saveTransaction(
   positiveMinorAmount(input.amountMinor, "Transaction amount");
   const validClassification = (input.type === "credit" && input.purpose === "income")
     || (input.type === "debit" && (input.purpose === "ordinary" || input.purpose === "investment"))
-    || (input.type === "transfer" && input.purpose === "investment" && (input.transferDestination === "brokerage" || input.transferDestination === "cash"));
+    || (input.type === "transfer" && input.purpose === "investment" && (input.transferDestination === "brokerage" || input.transferDestination === "retirement" || input.transferDestination === "cash"));
   if (!validClassification) throw new Error("Choose a valid income, expense, or transfer type.");
   if (input.type === "transfer" ? input.transferDestination === null : input.transferDestination !== null) {
-    throw new Error("Choose Brokerage or Cash as the transfer destination.");
+    throw new Error("Choose an investment destination for the transfer.");
+  }
+  if (input.type === "transfer") {
+    if (!input.accountId) throw new Error("Choose a destination account.");
+    if (input.sourceAccountId && input.accountId === input.sourceAccountId) {
+      throw new Error("Source and destination accounts must be different.");
+    }
+    if (!input.sourceAccountId && input.category !== "Paycheck transfer") {
+      throw new Error("Paycheck allocations must use the Paycheck transfer category.");
+    }
+  } else if (input.sourceAccountId) {
+    throw new Error("Only transfers can have a source account.");
   }
   if (!isCalendarDate(input.date)) {
     throw new Error("Choose a valid transaction date.");
@@ -282,17 +325,84 @@ export async function saveTransaction(
   const reference = existing
     ? doc(database, ...path(householdId, "transactions"), existing.id)
     : doc(collection(database, ...path(householdId, "transactions")));
-  await setDoc(reference, {
-    ...input,
-    createdBy: existing?.createdBy ?? actorUid,
-    createdAt: existing?.createdAt ?? serverTimestamp(),
-    updatedAt: serverTimestamp(),
+  await runTransaction(database, async (databaseTransaction) => {
+    const previousSnapshot = existing ? await databaseTransaction.get(reference) : undefined;
+    const previous = previousSnapshot?.exists() ? previousSnapshot.data() as FinancialTransaction : undefined;
+    const deltas = new Map<string, number>();
+    if (previous?.type === "transfer" && previous.ledgerApplied && previous.sourceAccountId && previous.accountId) {
+      deltas.set(previous.sourceAccountId, (deltas.get(previous.sourceAccountId) ?? 0) + previous.amountMinor);
+      deltas.set(previous.accountId, (deltas.get(previous.accountId) ?? 0) - previous.amountMinor);
+    } else if (previous?.type === "transfer" && previous.ledgerApplied && previous.accountId) {
+      deltas.set(previous.accountId, (deltas.get(previous.accountId) ?? 0) - previous.amountMinor);
+    }
+    if (input.type === "transfer") {
+      if (input.sourceAccountId) {
+        deltas.set(input.sourceAccountId, (deltas.get(input.sourceAccountId) ?? 0) - input.amountMinor);
+      }
+      deltas.set(input.accountId!, (deltas.get(input.accountId!) ?? 0) + input.amountMinor);
+    }
+
+    const accountReferences = new Map([...deltas.keys()].map((id) => [id, doc(database, ...path(householdId, "accounts"), id)]));
+    const accountSnapshots = new Map(await Promise.all([...accountReferences].map(async ([id, accountReference]) => [
+      id,
+      await databaseTransaction.get(accountReference),
+    ] as const)));
+    const nextBalances = new Map<string, number>();
+    for (const [id, delta] of deltas) {
+      const snapshot = accountSnapshots.get(id);
+      if (!snapshot?.exists()) throw new Error("A transfer account no longer exists.");
+      const account = snapshot.data() as FinancialAccount;
+      if (input.type === "transfer" && (id === input.sourceAccountId || id === input.accountId) && account.archived) {
+        throw new Error("Transfers must use active accounts.");
+      }
+      const expectedKind = input.type === "transfer" && id === input.accountId
+        ? input.transferDestination === "brokerage" ? "brokerage" : input.transferDestination === "retirement" ? "retirement" : "savings"
+        : undefined;
+      if (expectedKind && account.kind !== expectedKind) throw new Error("Choose a destination account that matches the selected investment type.");
+      const nextBalance = account.balanceMinor + delta;
+      if (!Number.isSafeInteger(nextBalance) || nextBalance < 0) {
+        throw new Error("The source account does not have enough balance for this transfer.");
+      }
+      nextBalances.set(id, nextBalance);
+    }
+
+    for (const [id, balanceMinor] of nextBalances) {
+      databaseTransaction.update(accountReferences.get(id)!, { balanceMinor, updatedAt: serverTimestamp() });
+    }
+    databaseTransaction.set(reference, {
+      ...input,
+      sourceAccountId: input.type === "transfer" ? input.sourceAccountId ?? null : null,
+      ledgerApplied: input.type === "transfer",
+      createdBy: previous?.createdBy ?? actorUid,
+      createdAt: previous?.createdAt ?? serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   });
   return reference.id;
 }
 
 export async function deleteTransaction(database: Firestore, householdId: string, id: string) {
-  await deleteDoc(doc(database, ...path(householdId, "transactions"), id));
+  const reference = doc(database, ...path(householdId, "transactions"), id);
+  await runTransaction(database, async (databaseTransaction) => {
+    const snapshot = await databaseTransaction.get(reference);
+    if (!snapshot.exists()) return;
+    const transaction = snapshot.data() as FinancialTransaction;
+    const accountIds = transaction.type === "transfer" && transaction.ledgerApplied
+      ? [transaction.sourceAccountId, transaction.accountId].filter((accountId): accountId is string => Boolean(accountId))
+      : [];
+    const accountReferences = accountIds.map((accountId) => doc(database, ...path(householdId, "accounts"), accountId));
+    const accountSnapshots = await Promise.all(accountReferences.map((accountReference) => databaseTransaction.get(accountReference)));
+    accountSnapshots.forEach((accountSnapshot, index) => {
+      if (!accountSnapshot.exists()) throw new Error("A transfer account no longer exists; the transfer cannot be deleted safely.");
+      const accountId = accountIds[index];
+      const account = accountSnapshot.data() as FinancialAccount;
+      const delta = accountId === transaction.sourceAccountId ? transaction.amountMinor : -transaction.amountMinor;
+      const balanceMinor = account.balanceMinor + delta;
+      if (!Number.isSafeInteger(balanceMinor) || balanceMinor < 0) throw new Error("The transfer cannot be reversed because it would make an account balance negative.");
+      databaseTransaction.update(accountReferences[index], { balanceMinor, updatedAt: serverTimestamp() });
+    });
+    databaseTransaction.delete(reference);
+  });
 }
 
 export async function saveCategory(

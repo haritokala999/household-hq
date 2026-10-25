@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { doc, getDoc } from "firebase/firestore";
+import { loadHouseholdActivity, markHouseholdActivitySeen, recordHouseholdActivity } from "@/lib/activity";
 import AuthGuard from "@/components/auth-guard";
 import { useHouseholds } from "@/hooks/use-households";
 import { auth } from "@/lib/firebase";
@@ -52,6 +53,7 @@ import type {
   AccountSnapshot,
   FinancialAccount,
   FinancialTransaction,
+  HouseholdActivity,
   HouseholdMember,
   ManualValueRecord,
   HouseholdCurrency,
@@ -75,6 +77,15 @@ const sections: Section[] = ["Dashboard", "Transactions", "Budgets", "Goals", "I
 const inputClass = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-600";
 const buttonClass = "rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60";
 const secondaryButtonClass = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800";
+const currencyFlags: Record<HouseholdCurrency, string> = {
+  USD: "🇺🇸",
+  CAD: "🇨🇦",
+  EUR: "🇪🇺",
+  GBP: "🇬🇧",
+  INR: "🇮🇳",
+  SAR: "🇸🇦",
+  KWD: "🇰🇼",
+};
 
 const emptyFinance: HouseholdFinanceData = {
   accounts: [], categories: [], transactions: [], budgets: [], goals: [], assets: [], liabilities: [], recurringPayments: [],
@@ -102,27 +113,36 @@ function useEditFocus<T extends HTMLElement>(targetKey: boolean | string | undef
   return ref;
 }
 
+function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return <button type="button" aria-label={open ? "Collapse sidebar" : "Expand sidebar"} aria-expanded={open} title={open ? "Collapse sidebar" : "Expand sidebar"} onClick={onToggle} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 md:w-full md:justify-start">
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M14 9h4M14 13h4" /></svg>
+    <span className="md:sr-only">{open ? "Collapse menu" : "Expand menu"}</span>
+  </button>;
+}
+
 export default function Home() {
   const router = useRouter();
   const { uid, households, activeHouseholdId, loading: householdsLoading, error: householdError, retry, refreshHouseholds, selectHousehold } = useHouseholds();
   const [section, setSection] = useState<Section>("Dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [finance, setFinance] = useState<HouseholdFinanceData>(emptyFinance);
   const [members, setMembers] = useState<HouseholdMember[]>([]);
   const [loadingFinance, setLoadingFinance] = useState(false);
   const [financeError, setFinanceError] = useState("");
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [householdActivity, setHouseholdActivity] = useState<HouseholdActivity[]>([]);
   const [toast, setToast] = useState<AppNotification>();
   const [celebration, setCelebration] = useState<Celebration>();
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const notificationSequence = useRef(0);
   const celebrationSequence = useRef(0);
+  const activityHouseholdRef = useRef<string | undefined>(undefined);
   const [signOutError, setSignOutError] = useState("");
   const [signingOut, setSigningOut] = useState(false);
   const [month, setMonth] = useState("");
   const [transactionFilter, setTransactionFilter] = useState("");
   const [transactionTypeFilter, setTransactionTypeFilter] = useState("all");
-  const [editingAccount, setEditingAccount] = useState<FinancialAccount | undefined>();
   const [editingTransaction, setEditingTransaction] = useState<FinancialTransaction | undefined>();
   const [editingBudget, setEditingBudget] = useState<MonthlyBudget | undefined>();
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | undefined>();
@@ -147,7 +167,7 @@ export default function Home() {
   const currency = selectedHousehold?.currency ?? "USD";
   const memberNames = useMemo(() => new Map(members.map((member) => [member.uid, member.displayName || member.email || member.uid])), [members]);
 
-  function addNotification(message: string, type: AppNotification["type"] = "success") {
+  const addNotification = useCallback((message: string, type: AppNotification["type"] = "success") => {
     const notification = {
       id: ++notificationSequence.current,
       message,
@@ -157,7 +177,16 @@ export default function Home() {
     setToast(notification);
     setNotifications((current) => [notification, ...current].slice(0, 20));
     setUnreadNotifications((current) => current + 1);
-  }
+  }, []);
+
+  const recordActivityForHousehold = useCallback(async (targetHouseholdId: string, summary: string) => {
+    if (!uid) return;
+    try {
+      await recordHouseholdActivity(db, targetHouseholdId, uid, auth.currentUser?.displayName || "Household member", summary);
+    } catch {
+      addNotification("Your change was saved, but its household activity update could not be recorded.", "error");
+    }
+  }, [addNotification, uid]);
 
   useEffect(() => {
     if (!toast) return;
@@ -235,16 +264,46 @@ export default function Home() {
     setInvitation(null);
   }, [uid]);
 
+  useEffect(() => {
+    const activityKey = householdId && uid ? `${uid}/${householdId}` : undefined;
+    if (!householdId || !uid || activityHouseholdRef.current === activityKey) return;
+    activityHouseholdRef.current = activityKey;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { activities, updatesSinceLastVisit, hasPreviousVisit } = await loadHouseholdActivity(db, householdId, uid);
+        if (cancelled) return;
+        setHouseholdActivity(activities.filter((activity) => activity.actorUid !== uid));
+        const unseenUpdates = updatesSinceLastVisit.filter((activity) => activity.actorUid !== uid);
+        if (hasPreviousVisit && unseenUpdates.length) {
+          addNotification(`${unseenUpdates.length} new household update${unseenUpdates.length === 1 ? "" : "s"} since your last visit.`);
+          setShowNotifications(true);
+        }
+        await markHouseholdActivitySeen(db, householdId, uid);
+      } catch (cause) {
+        if (!cancelled) {
+          addNotification(cause instanceof Error ? cause.message : "Could not load household activity.", "error");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (activityHouseholdRef.current === activityKey) activityHouseholdRef.current = undefined;
+    };
+  }, [addNotification, householdId, uid]);
+
   async function runAction(
     action: () => Promise<unknown>,
     successMessage = "Saved.",
     onSuccess?: () => void,
     celebrationKind?: CelebrationKind,
+    rethrowOnError = false,
   ) {
     setFinanceError("");
     try {
       await action();
       addNotification(successMessage);
+      if (householdId) await recordActivityForHousehold(householdId, successMessage);
       await refresh();
       onSuccess?.();
       if (celebrationKind) {
@@ -254,6 +313,7 @@ export default function Home() {
       const message = cause instanceof Error ? cause.message : "The change could not be saved.";
       setFinanceError(message);
       addNotification(message, "error");
+      if (rethrowOnError) throw cause;
     }
   }
 
@@ -286,6 +346,7 @@ export default function Home() {
     setHouseholdNameError("");
     try {
       await renameHousehold(householdId, householdNameDraft);
+      await recordActivityForHousehold(householdId, `Renamed the household to ${householdNameDraft.trim()}.`);
       setEditingHouseholdName(false);
       await retry();
     } catch (cause) {
@@ -307,6 +368,7 @@ export default function Home() {
     setInvitation(null);
     try {
       await transferHouseholdOwnership(householdId, newOwnerUid);
+      await recordActivityForHousehold(householdId, `Transferred household ownership to ${newOwnerName}.`);
       await Promise.all([retry(), refresh()]);
       addNotification(`${newOwnerName} is now the household owner. You are now a member.`);
     } catch (cause) {
@@ -329,6 +391,7 @@ export default function Home() {
     setFinanceError("");
     try {
       await promoteHouseholdMemberToOwner(householdId, memberUid);
+      await recordActivityForHousehold(householdId, `Promoted ${memberName} to co-owner.`);
       await Promise.all([retry(), refresh()]);
       addNotification(`${memberName} is now an owner. You remain an owner.`);
     } catch (cause) {
@@ -365,6 +428,7 @@ export default function Home() {
         throw new Error("Your membership is marked as owner, but this household names a different owner account. The owner records need to be corrected before inviting members.");
       }
       const code = await createHouseholdInvitation(db, householdId, uid);
+      await recordActivityForHousehold(householdId, "Created a household invitation.");
       setInvitation({ code, uid, householdId });
       addNotification(`Invitation created. It expires in ${INVITATION_LIFETIME_DAYS} days.`);
     } catch (cause) {
@@ -376,6 +440,7 @@ export default function Home() {
 
   async function handleCreateAdditionalHousehold(name: string, householdCurrency: HouseholdCurrency) {
     const newHouseholdId = await createHousehold(name, householdCurrency);
+    await recordActivityForHousehold(newHouseholdId, "Created this household.");
     await refreshHouseholds();
     selectHousehold(newHouseholdId);
     addNotification("Your new household is ready.");
@@ -391,6 +456,7 @@ export default function Home() {
       email: user.email,
       displayName: user.displayName,
     });
+    await recordActivityForHousehold(joinedHouseholdId, `${user.displayName || "A member"} joined the household.`);
     await refreshHouseholds();
     selectHousehold(joinedHouseholdId);
     addNotification("You joined the household.");
@@ -420,23 +486,26 @@ export default function Home() {
   return (
     <AuthGuard>
       <main className={`app-shell min-h-screen bg-[#f3f7f5] text-slate-900 md:flex ${darkMode ? "app-dark" : ""}`}>
-        <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white md:min-h-screen md:w-64 md:border-b-0 md:border-r">
-          <Link href="/" aria-label="HouseholdHQ dashboard home" className="flex items-center gap-3 px-6 py-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"><Image src="/householdhq-icon.svg" alt="" width={40} height={40} priority className="h-10 w-10 shrink-0 rounded-xl object-contain" /><div><p className="text-lg font-bold tracking-tight">HouseholdHQ</p><p className="text-xs text-slate-500">Your money, together.</p></div></Link>
-            <div className="px-4 pb-4">
+        <aside className={`sticky top-0 z-30 flex w-full shrink-0 flex-col border-b border-slate-200 bg-white md:h-screen md:self-start md:border-b-0 md:border-r ${sidebarOpen ? "md:w-64" : "md:w-20"}`}>
+          <Link href="/" onClick={() => setSection("Dashboard")} aria-label="HouseholdHQ dashboard home" title="Go to Dashboard" className={`flex min-h-20 items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${sidebarOpen ? "gap-3 px-6 py-5" : "justify-center px-3 py-5"}`}><Image src="/householdhq-icon.svg" alt="" width={40} height={40} priority className="h-10 w-10 shrink-0 rounded-xl object-contain" />{sidebarOpen && <div><p className="text-lg font-bold tracking-tight">HouseholdHQ</p><p className="text-xs text-slate-500">One home. One financial plan.</p></div>}</Link>
+          {sidebarOpen && <div className="px-4 pb-4">
               <div className="household-info-card w-full max-w-sm rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur-xl">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Household</p>
+                <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Household</p><span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-800">Current</span></div>
                 {editingHouseholdName ? <form id="household-name-editor" onSubmit={handleRenameHousehold} className="edit-focus-target mt-2 space-y-2"><input autoFocus required maxLength={80} aria-label="Household name" value={householdNameDraft} onChange={(event) => setHouseholdNameDraft(event.target.value)} className={inputClass} /><div className="flex gap-2"><button disabled={savingHouseholdName} className={`${buttonClass} px-3 py-2`}>{savingHouseholdName ? "Saving…" : "Save"}</button><button type="button" disabled={savingHouseholdName} onClick={() => { setEditingHouseholdName(false); setHouseholdNameError(""); }} className={secondaryButtonClass}>Cancel</button></div>{householdNameError && <p role="alert" className="text-xs text-red-700">{householdNameError}</p>}</form> : <div className="mt-1 flex items-center gap-2">{households.length > 1 ? <select aria-label="Active household" value={householdId} onChange={(event) => selectHousehold(event.target.value)} className="min-w-0 flex-1 bg-transparent font-semibold">{households.map((item) => <option key={item.householdId} value={item.householdId}>{item.householdName}</option>)}</select> : <p className="min-w-0 flex-1 truncate font-semibold">{selectedHousehold?.householdName}</p>}{selectedHousehold?.role === "owner" && <button type="button" aria-label={`Edit ${selectedHousehold.householdName}`} title={`Edit ${selectedHousehold.householdName}`} onClick={startEditingHouseholdName} className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-50 hover:text-emerald-800">Edit</button>}</div>}
-                <p className="mt-1 text-xs text-slate-500">{members.length} members · {currency}</p>
+                <p className="mt-1 text-xs text-slate-500">{members.length} members · <span aria-label={HOUSEHOLD_CURRENCY_NAMES[currency]} title={HOUSEHOLD_CURRENCY_NAMES[currency]}>{currencyFlags[currency]} {currency}</span></p>
               </div>
-            </div>
+          </div>}
 
 
-          <div className="mt-auto hidden p-4 md:block"><div className="rounded-xl bg-slate-900 p-4 text-white"><p className="text-sm font-semibold">Your finances, together</p><p className="mt-1 text-xs leading-5 text-slate-300">Balances are entered manually. Transactions help you plan; they never change account balances.</p></div><p className="mt-4 text-xs text-slate-400">HouseholdHQ · Shared workspace</p></div>
+          <div className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-3 z-50 md:hidden"><SidebarToggle open={sidebarOpen} onToggle={() => setSidebarOpen((open) => !open)} /></div>
+          <div className="mt-auto hidden p-4 md:flex md:flex-col md:gap-3">{sidebarOpen && <><div className="rounded-xl bg-slate-900 p-4 text-white"><p className="text-sm font-semibold">Your finances, together</p><p className="mt-1 text-xs leading-5 text-slate-300">Balances are entered manually. Transactions help you plan; they never change account balances.</p></div><p className="text-xs text-slate-400">HouseholdHQ · Shared workspace</p></>}<SidebarToggle open={sidebarOpen} onToggle={() => setSidebarOpen((open) => !open)} /></div>
         </aside>
 
         <section className="min-w-0 flex-1">
-          <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 sm:px-8">
-            <div><p className="text-sm text-slate-500">{selectedHousehold?.householdName}</p><h1 className="mt-1 text-xl font-bold tracking-tight">{section === "Dashboard" ? "Dashboard" : section}</h1></div>
+          <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur-xl sm:px-8 sm:py-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <h1 className="text-xl font-bold tracking-tight">{section === "Dashboard" ? "Dashboard" : section}</h1>
+            </div>
             <div className="flex items-center gap-2">
               {signOutError && <span role="alert" className="text-sm text-red-700">{signOutError}</span>}
               <div className="relative">
@@ -446,7 +515,15 @@ export default function Home() {
                   aria-expanded={showNotifications}
                   aria-haspopup="true"
                   onClick={() => {
-                    setShowNotifications((open) => !open);
+                    setShowNotifications((open) => {
+                      const opening = !open;
+                      if (opening && householdId && uid) {
+                        void markHouseholdActivitySeen(db, householdId, uid).catch((cause: unknown) => {
+                          addNotification(cause instanceof Error ? cause.message : "Could not update notification status.", "error");
+                        });
+                      }
+                      return opening;
+                    });
                     setUnreadNotifications(0);
                   }}
                   title="Notifications"
@@ -463,7 +540,17 @@ export default function Home() {
                     <h2 className="font-bold">Notifications</h2>
                     <button type="button" onClick={() => setShowNotifications(false)} aria-label="Close notifications" className="rounded-md px-2 py-1 text-slate-500 hover:bg-slate-100">×</button>
                   </div>
+                  {householdActivity.length > 0 && <>
+                    <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Updates from your household</h3>
+                    <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto">
+                      {householdActivity.map((activity) => <li key={activity.id} className="rounded-lg bg-teal-50 p-3 text-sm text-teal-950">
+                        <p><strong>{activity.actorName}</strong> {activity.summary}</p>
+                        <time className="mt-1 block text-xs opacity-70" dateTime={activity.createdAt.toDate().toISOString()}>{activity.createdAt.toDate().toLocaleString()}</time>
+                      </li>)}
+                    </ul>
+                  </>}
                   {notifications.length ? <>
+                    <h3 className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Recent notices</h3>
                     <ul className="mt-3 max-h-80 space-y-2 overflow-y-auto">
                       {notifications.map((notification) => <li key={notification.id} className={`rounded-lg p-3 text-sm ${notification.type === "error" ? "bg-red-50 text-red-800" : "bg-emerald-50 text-emerald-900"}`}>
                         <p>{notification.message}</p>
@@ -471,7 +558,7 @@ export default function Home() {
                       </li>)}
                     </ul>
                     <button type="button" onClick={() => setNotifications([])} className="mt-3 text-xs font-semibold text-slate-500 underline">Clear notifications</button>
-                  </> : <p className="mt-3 text-sm text-slate-500">You’re all caught up.</p>}
+                  </> : householdActivity.length === 0 && <p className="mt-3 text-sm text-slate-500">You’re all caught up.</p>}
                 </div>}
               </div>
               <button
@@ -480,11 +567,12 @@ export default function Home() {
                 aria-pressed={darkMode}
                 title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
                 onClick={toggleTheme}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
               >
                 {darkMode
                   ? <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg>
                   : <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z" /></svg>}
+                <span className="text-xs font-semibold">{darkMode ? "Light" : "Dark"}</span>
               </button>
               <button
                 type="button"
@@ -501,7 +589,7 @@ export default function Home() {
               </button>
             </div>
           </header>
-          <nav aria-label="Workspace" className="glass-nav mx-auto my-4 flex w-fit max-w-[calc(100%-2rem)] gap-1 overflow-x-auto rounded-full p-1.5">
+          <nav aria-label="Workspace" className="workspace-nav glass-nav fixed inset-x-0 bottom-0 z-40 mx-0 flex w-full max-w-none justify-around gap-1 rounded-none rounded-t-2xl p-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:sticky md:inset-x-auto md:top-2 md:bottom-auto md:mx-auto md:my-4 md:w-fit md:max-w-[calc(100%-2rem)] md:justify-start md:rounded-full md:p-1.5">
             {sections.map((item) => {
               const active = section === item;
               return (
@@ -510,9 +598,9 @@ export default function Home() {
                   type="button"
                   aria-current={active ? "page" : undefined}
                   onClick={() => setSection(item)}
-                  className={`glass-nav-item group inline-flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 ${active ? "glass-nav-active" : "glass-nav-idle"}`}
+                  className={`glass-nav-item group inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[9px] font-medium leading-none transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 sm:text-[10px] md:flex-none md:flex-row md:gap-2 md:rounded-full md:px-4 md:py-2 md:text-sm md:leading-normal ${active ? "glass-nav-active" : "glass-nav-idle"}`}
                 >
-                  <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full transition-colors duration-200 ${active ? "bg-teal-100 text-teal-800" : "bg-slate-100/80 text-slate-500 group-hover:bg-teal-50 group-hover:text-teal-700"}`}>
+                  <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors duration-200 ${active ? "bg-teal-100 text-teal-800" : "bg-slate-100/80 text-slate-500 group-hover:bg-teal-50 group-hover:text-teal-700"}`}>
                     <WorkspaceIcon section={item} />
                   </span>
                   <span>{item}</span>
@@ -520,11 +608,17 @@ export default function Home() {
               );
             })}
           </nav>
-          <div className="mx-auto max-w-7xl space-y-6 p-5 sm:p-8">
+          <div className="mx-auto max-w-7xl space-y-6 px-4 pb-24 pt-5 sm:px-8 sm:pt-8 md:pb-8">
             {financeError && <ErrorPanel message={financeError} onRetry={refresh} />}
             {loadingFinance ? <LoadingPanel label="Loading household records…" /> : (
               <>
-                {section === "Dashboard" && <Dashboard finance={finance} month={month} setMonth={setMonth} currency={currency} memberNames={memberNames} onOpen={setSection} onAddPayment={(input) => runAction(() => saveRecurringPayment(db, householdId!, uid!, input), "Recurring payment added.")} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Recurring payment removed.")} />}
+                {section === "Dashboard" && <Dashboard finance={finance} month={month} setMonth={setMonth} currency={currency} memberNames={memberNames} onOpen={setSection} onAddPayment={(input) => runAction(
+                  () => saveRecurringPayment(db, householdId!, uid!, input),
+                  input.frequency === "once" ? "One-time payment added." : "Recurring payment added.",
+                  undefined,
+                  undefined,
+                  true,
+                )} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.")} />}
                 {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.")} editing={editingTransaction} setEditing={setEditingTransaction} />}
                 {section === "Budgets" && <BudgetsSection finance={finance} currency={currency} month={month} setMonth={setMonth} onSave={(input, existing) => runAction(() => saveBudget(db, householdId!, uid!, input, existing), "Budget saved.", undefined, existing ? undefined : "budget")} onCopyPrevious={(sourceMonth, targetMonth) => runAction(() => copyPreviousMonthBudgets(db, householdId!, uid!, sourceMonth, targetMonth, finance.budgets), "Previous month’s budgets copied into the selected month.")} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "budgets", id), "Budget deleted.")} editing={editingBudget} setEditing={setEditingBudget} />}
                 {section === "Goals" && <GoalsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} onSave={(input, existing) => runAction(() => saveGoal(db, householdId!, uid!, input, existing), "Goal saved.", undefined, !existing && input.currentMinor >= input.targetMinor ? "goal" : undefined)} onAddProgress={(goalId, amountMinor, onSuccess) => {
@@ -532,7 +626,7 @@ export default function Home() {
                   const completesGoal = Boolean(goal && goal.currentMinor < goal.targetMinor && goal.currentMinor + amountMinor >= goal.targetMinor);
                   return runAction(() => addGoalProgress(db, householdId!, goalId, amountMinor), completesGoal ? "Goal achieved — congratulations!" : "Goal progress updated.", onSuccess, completesGoal ? "goal" : undefined);
                 }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.")} editing={editingGoal} setEditing={setEditingGoal} />}
-                {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} editing={editingAccount} setEditing={setEditingAccount} snapshots={snapshotHistory} onSaveAccount={(input, existing) => runAction(async () => { const accountId = await saveAccount(db, householdId!, uid!, currency, input, existing); const thisMonth = currentMonthKey(); if (!(snapshotHistory[accountId] ?? []).some((snapshot) => snapshot.month === thisMonth)) await addAccountSnapshot(db, householdId!, accountId, uid!, thisMonth, input.balanceMinor); }, "Account balance saved.")} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.")} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.")} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`)} />}
+                {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} darkMode={darkMode} snapshots={snapshotHistory} onSaveAccount={(input) => runAction(async () => { const accountId = await saveAccount(db, householdId!, uid!, currency, input); const thisMonth = currentMonthKey(); if (!(snapshotHistory[accountId] ?? []).some((snapshot) => snapshot.month === thisMonth)) await addAccountSnapshot(db, householdId!, accountId, uid!, thisMonth, input.balanceMinor); }, "Account added.")} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.")} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.")} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`)} />}
                 {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} onSelectHousehold={selectHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
               </>
             )}
@@ -634,12 +728,13 @@ function MetricCard({ title, value, detail, accent = "emerald", note, icon, extr
 }
 
 function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, onAddPayment, onDeletePayment }: {
-  finance: HouseholdFinanceData; month: string; setMonth: (month: string) => void; currency: string; memberNames: Map<string, string>; onOpen: (section: Section) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay">) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
+  finance: HouseholdFinanceData; month: string; setMonth: (month: string) => void; currency: string; memberNames: Map<string, string>; onOpen: (section: Section) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey">) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
 }) {
   const financialSummary = calculateFinanceSummary(finance, month || "1970-01");
   const [paymentName, setPaymentName] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentDueDay, setPaymentDueDay] = useState("1");
+  const [paymentFrequency, setPaymentFrequency] = useState<"monthly" | "once">("monthly");
   const [paymentError, setPaymentError] = useState("");
   const [savingPayment, setSavingPayment] = useState(false);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
@@ -676,7 +771,9 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
   const changeText = (amount: number, prior: number) => `${percentChange(amount, prior)} vs last month`;
   const daysInMonth = new Date(year, monthNumber, 0).getDate();
   const firstWeekday = new Date(year, monthNumber - 1, 1).getDay();
-  const paymentDates = finance.recurringPayments.map((payment) => ({
+  const paymentDates = finance.recurringPayments.filter((payment) =>
+    (payment.frequency ?? "monthly") === "monthly" || payment.monthKey === month
+  ).map((payment) => ({
     ...payment,
     day: Math.min(payment.dueDay, daysInMonth),
   })).sort((a, b) => a.day - b.day);
@@ -685,10 +782,17 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
     setPaymentError("");
     setSavingPayment(true);
     try {
-      await onAddPayment({ name: paymentName, amountMinor: parseMoneyToMinorUnits(paymentAmount, currency), dueDay: Number(paymentDueDay) });
+      await onAddPayment({
+        name: paymentName,
+        amountMinor: parseMoneyToMinorUnits(paymentAmount, currency),
+        dueDay: Number(paymentDueDay),
+        frequency: paymentFrequency,
+        ...(paymentFrequency === "once" ? { monthKey: month } : {}),
+      });
       setPaymentName("");
       setPaymentAmount("");
       setPaymentDueDay("1");
+      setPaymentFrequency("monthly");
       setShowPaymentForm(false);
     } catch (cause) {
       setPaymentError(cause instanceof Error ? cause.message : "Could not add the recurring payment.");
@@ -707,11 +811,11 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
       <section className="rounded-2xl border border-slate-200 bg-white p-5 md:col-span-2 xl:col-span-2 xl:col-start-5 xl:row-span-2 xl:row-start-1">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">Upcoming payments</h2><p className="mt-1 text-sm text-slate-500">Monthly bills and recurring payments</p></div><div className="ml-auto flex items-center gap-3"><span className="text-sm font-medium text-slate-600">{new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}</span><button type="button" onClick={() => { setShowPaymentForm((current) => !current); setPaymentError(""); }} aria-label={showPaymentForm ? "Close recurring payment form" : "Add recurring payment"} aria-expanded={showPaymentForm} className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-teal-700 text-white shadow-sm transition-all duration-200 hover:scale-110 hover:bg-teal-800 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 active:scale-95" title={showPaymentForm ? "Close recurring payment form" : "Add recurring payment"}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className={`h-5 w-5 transition-transform duration-200 ${showPaymentForm ? "rotate-45" : ""}`}><path d="M12 5v14M5 12h14" /></svg></button></div></div>
         <div className="mt-4 grid grid-cols-7 gap-1 text-center text-xs">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`} className="py-1 font-semibold text-slate-400">{day}</span>)}{Array.from({ length: firstWeekday }, (_, index) => <span key={`empty-${index}`} />)}{Array.from({ length: daysInMonth }, (_, index) => { const day = index + 1; const dueToday = paymentDates.some((payment) => payment.day === day); return <span key={day} className={`relative rounded-lg py-1.5 ${dueToday ? "bg-emerald-50 font-semibold text-emerald-800" : "text-slate-600"}`}>{day}{dueToday && <i className="absolute bottom-0.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-emerald-600" />}</span>; })}</div>
-        <div className="mt-4 space-y-2">{paymentDates.map((payment) => <div key={payment.id} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-medium">{payment.name}</p><p className="text-xs text-slate-500">Due {new Date(year, monthNumber - 1, payment.day).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · repeats monthly</p></div><div className="flex shrink-0 items-center gap-2"><span className="font-semibold">{formatMoney(payment.amountMinor, currency)}</span><button type="button" onClick={() => void onDeletePayment(payment.id)} aria-label={`Remove ${payment.name}`} className="text-slate-400 hover:text-red-700">×</button></div></div>)}{!paymentDates.length && <p className="text-sm text-slate-500">No recurring payments added yet.</p>}</div>
-        {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-[1.4fr_1fr_0.7fr_auto]"><input autoFocus required maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment" aria-label="Bill or payment name" className={inputClass} /><input required inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} /><input required type="number" min="1" max="31" value={paymentDueDay} onChange={(event) => setPaymentDueDay(event.target.value)} aria-label="Due day of month" title="Due day each month" className={inputClass} /><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Add bill"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-4">{paymentError}</p>}</form>}
+        <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">{paymentDates.map((payment) => <div key={payment.id} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-medium">{payment.name}</p><p className="text-xs text-slate-500">Due {new Date(year, monthNumber - 1, payment.day).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {(payment.frequency ?? "monthly") === "monthly" ? "repeats monthly" : "one-time"}</p></div><div className="flex shrink-0 items-center gap-2"><span className="font-semibold">{formatMoney(payment.amountMinor, currency)}</span><button type="button" onClick={() => void onDeletePayment(payment.id)} aria-label={`Remove ${payment.name}`} className="text-slate-400 hover:text-red-700">×</button></div></div>)}{!paymentDates.length && <p className="text-sm text-slate-500">No payments due this month yet.</p>}</div>
+        {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-2"><input autoFocus required maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment" aria-label="Bill or payment name" className={inputClass} /><input required inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} />        <select value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value === "once" ? "once" : "monthly")} aria-label="Payment frequency" className={inputClass}><option value="monthly">Repeats every month</option><option value="once">Only this month</option></select><input required type="number" min="1" max="31" value={paymentDueDay} onChange={(event) => setPaymentDueDay(event.target.value)} aria-label="Due day of month" title="Due day of month" className={inputClass} /><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Add payment"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2">{paymentError}</p>}</form>}
       </section>
     </div>
-    <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-bold">Expenses vs savings</h2><p className="mt-1 text-sm text-slate-500">Monthly totals for {year} · hover or focus a month for details</p></div><div className="flex gap-4 text-xs text-slate-500"><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-amber-500" />Expenses</span><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-emerald-600" />Savings</span></div></div><div className="mt-5 grid grid-cols-6 gap-3 sm:grid-cols-12">{monthly.map((item, index) => <div key={item.shortMonth} tabIndex={0} role="group" aria-label={`${item.month}: income ${formatMoney(item.income, currency)}, expenses ${formatMoney(item.expenses, currency)}, investment contributions ${formatMoney(item.investments, currency)}, saved ${formatMoney(item.savings, currency)}`} aria-describedby={`monthly-insight-${index}`} className="group relative min-w-0 rounded-lg text-center outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-52 -translate-x-1/2 rounded-xl border border-slate-700 bg-slate-900 p-3 text-left text-xs text-white shadow-xl group-hover:block group-focus:block"><p className="mb-2 font-semibold">{item.month} {year}</p><dl className="space-y-1.5"><div className="flex justify-between gap-3"><dt className="text-slate-300">Income</dt><dd className="font-medium">{formatMoney(item.income, currency)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-300">Ordinary expenses</dt><dd className="font-medium">{formatMoney(item.expenses, currency)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-300">Investment contributions</dt><dd className="font-medium">{formatMoney(item.investments, currency)}</dd></div><div className="flex justify-between gap-3 border-t border-slate-700 pt-1.5"><dt className="text-slate-300">After expenses + investing</dt><dd className="font-semibold">{formatMoney(item.savings, currency)}</dd></div></dl><span id={`monthly-insight-${index}`} className="sr-only">Income, ordinary expenses, investment contributions, and amount after expenses and investing for {item.month} {year}.</span></div><div className="flex h-36 items-end justify-center gap-1 border-b border-slate-100"><div className="w-3 rounded-t bg-amber-500 transition-[height] duration-300 group-hover:bg-amber-600" style={{ height: `${Math.max(2, Math.max(0, item.expenses) / chartMax * 100)}%` }} /><div className="w-3 rounded-t bg-emerald-600 transition-[height] duration-300 group-hover:bg-emerald-700" style={{ height: `${Math.max(2, Math.max(0, item.savings) / chartMax * 100)}%` }} /></div><p className="mt-2 text-xs text-slate-500">{item.shortMonth}</p></div>)}</div></section>
+    <section className="dashboard-insights-chart rounded-2xl border border-slate-200 bg-white p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-bold">Expenses vs savings</h2><p className="mt-1 text-sm text-slate-500">Monthly totals for {year} · hover or focus a month for details</p></div><div className="flex gap-4 text-xs text-slate-500"><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-amber-500" />Expenses</span><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-emerald-600" />Savings</span></div></div><div className="mt-5 grid grid-cols-6 gap-3 sm:grid-cols-12">{monthly.map((item, index) => <div key={item.shortMonth} tabIndex={0} role="group" aria-label={`${item.month}: income ${formatMoney(item.income, currency)}, expenses ${formatMoney(item.expenses, currency)}, investment contributions ${formatMoney(item.investments, currency)}, saved ${formatMoney(item.savings, currency)}`} aria-describedby={`monthly-insight-${index}`} className="group relative min-w-0 rounded-lg text-center outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-52 -translate-x-1/2 rounded-xl border border-slate-700 bg-slate-900 p-3 text-left text-xs text-white shadow-xl group-hover:block group-focus:block"><p className="mb-2 font-semibold">{item.month} {year}</p><dl className="space-y-1.5"><div className="flex justify-between gap-3"><dt className="text-slate-300">Income</dt><dd className="font-medium">{formatMoney(item.income, currency)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-300">Ordinary expenses</dt><dd className="font-medium">{formatMoney(item.expenses, currency)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-300">Investment contributions</dt><dd className="font-medium">{formatMoney(item.investments, currency)}</dd></div><div className="flex justify-between gap-3 border-t border-slate-700 pt-1.5"><dt className="text-slate-300">After expenses + investing</dt><dd className="font-semibold">{formatMoney(item.savings, currency)}</dd></div></dl><span id={`monthly-insight-${index}`} className="sr-only">Income, ordinary expenses, investment contributions, and amount after expenses and investing for {item.month} {year}.</span></div><div className="flex h-36 items-end justify-center gap-1 border-b border-slate-100"><div className="w-3 rounded-t bg-amber-500 transition-[height] duration-300 group-hover:bg-amber-600" style={{ height: `${Math.max(2, Math.max(0, item.expenses) / chartMax * 100)}%` }} /><div className="w-3 rounded-t bg-emerald-600 transition-[height] duration-300 group-hover:bg-emerald-700" style={{ height: `${Math.max(2, Math.max(0, item.savings) / chartMax * 100)}%` }} /></div><p className="mt-2 text-xs text-slate-500">{item.shortMonth}</p></div>)}</div></section>
     <div className="grid gap-6 xl:grid-cols-2">
       <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Goals</h2><button onClick={() => onOpen("Goals")} className="text-sm font-semibold text-emerald-700">Manage →</button></div><div className="mt-4 space-y-4">{finance.goals.slice(0, 4).map((goal) => { const progress = goalProgressPercent(goal.currentMinor, goal.targetMinor); const visibleWidth = progress > 0 ? Math.max(1, progress) : 0; const progressLabel = progress > 0 && progress < 1 ? "<1%" : `${Math.round(progress)}%`; return <div key={goal.id}><div className="flex justify-between gap-3 text-sm"><span className="font-medium">{goal.name}</span><span className="text-slate-500">{progressLabel}</span></div><div role="progressbar" aria-label={`${goal.name} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-600 transition-[width] duration-500" style={{ width: `${visibleWidth}%` }} /></div><p className="mt-1 text-xs text-slate-500">{formatMoney(goal.currentMinor, currency)} of {formatMoney(goal.targetMinor, currency)}{goal.deadline ? ` · due ${goal.deadline}` : ""}</p></div>; })}{!finance.goals.length && <p className="text-sm text-slate-500">No goals yet.</p>}</div></section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Category budgets</h2><button onClick={() => onOpen("Budgets")} className="text-sm font-semibold text-emerald-700">Manage →</button></div><p className="mt-1 text-xs text-slate-500">This month’s ordinary debit transactions compared with each category limit.</p><div className="mt-4 space-y-4">{finance.budgets.filter((budget) => budget.month === month).map((budget) => { const progress = budgetProgress(budget, finance.transactions); return <div key={budget.id}><div className="flex justify-between gap-3 text-sm"><span className="font-medium">{budget.category}</span><span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}>{formatMoney(progress.spentMinor, currency)} / {formatMoney(budget.limitMinor, currency)}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${progress.overspent ? "bg-red-500" : "bg-amber-500"}`} style={{ width: `${Math.min(progress.percent, 100)}%` }} /></div><p className={`mt-1 text-xs ${progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}`}>{progress.overspent ? `${formatMoney(Math.abs(progress.remainingMinor), currency)} over budget` : `${formatMoney(progress.remainingMinor, currency)} remaining`}</p></div>; })}{!finance.budgets.some((budget) => budget.month === month) && <p className="text-sm text-slate-500">No category budgets for this month.</p>}</div></section>
@@ -736,7 +840,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
   setFilter: (value: string) => void;
   typeFilter: string;
   setTypeFilter: (value: string) => void;
-  onSave: (input: Pick<FinancialTransaction, "type" | "purpose" | "transferDestination" | "category" | "description" | "amountMinor" | "date" | "accountId" | "ownerUid">, existing?: FinancialTransaction) => Promise<void>;
+  onSave: (input: Pick<FinancialTransaction, "type" | "purpose" | "transferDestination" | "category" | "description" | "amountMinor" | "date" | "accountId" | "sourceAccountId" | "ownerUid">, existing?: FinancialTransaction) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   editing?: FinancialTransaction;
   setEditing: (transaction?: FinancialTransaction) => void;
@@ -782,11 +886,12 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
               ? "investment"
               : "ordinary",
         transferDestination: type === "transfer" ? transferDestination : null,
-        category,
+        category: type === "transfer" ? "Paycheck transfer" : category,
         description,
         amountMinor: parseMoneyToMinorUnits(amount, currency),
         date,
-        accountId: accountId || null,
+        accountId: type === "transfer" ? accountId || null : accountId || null,
+        sourceAccountId: null,
         ownerUid,
       }, editing);
       setEditing(undefined);
@@ -794,6 +899,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
       setDescription("");
       setShowDescription(false);
       setAmount("");
+      setAccountId("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save transaction.");
     }
@@ -822,7 +928,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
     <div className="grid gap-6 xl:grid-cols-[1fr_1.3fr]">
       <section ref={editorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-center gap-2"><span className="rounded-lg bg-emerald-50 p-2 text-emerald-700"><WorkspaceIcon section="Transactions" /></span><h2 className="font-bold">{editing ? "Edit transaction" : "Add a transaction"}</h2></div>
-        <p className="mt-1 text-xs text-slate-500">Adding a transaction never changes an account balance.</p>
+        <p className="mt-1 text-xs text-slate-500">Paycheck allocations increase the selected investment account. Record paycheck income separately.</p>
         <form onSubmit={submit} className="mt-4 space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-sm font-medium">Type
@@ -834,18 +940,18 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
               }} className={`${inputClass} mt-1`}>
                 <option value="debit">Expense</option>
                 <option value="credit">Income</option>
-                <option value="transfer">Transfer</option>
+                <option value="transfer">Paycheck allocation</option>
               </select>
             </label>
           </div>
-          {type === "transfer" && <button type="button" onClick={() => setShowTransferDialog(true)} className="w-full rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left text-sm font-medium text-teal-800">Destination: {transferDestination === "brokerage" ? "Brokerage" : transferDestination === "cash" ? "Cash" : "Choose Brokerage or Cash"}</button>}
-          <label className="block text-sm font-medium">Category
+          {type === "transfer" && <button type="button" onClick={() => setShowTransferDialog(true)} className="w-full rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left text-sm font-medium text-teal-800">Destination type: {transferDestination === "brokerage" ? "Brokerage" : transferDestination === "retirement" ? "401(k)" : transferDestination === "cash" ? "Cash" : "Choose an investment type"}</button>}
+          {type === "transfer" ? <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">Category: <span className="font-semibold">Paycheck transfer</span></p> : <label className="block text-sm font-medium">Category
             <select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}>
               <option value="" disabled>Choose a category</option>
               {editing?.category && !(TRANSACTION_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{editing.category} (existing)</option>}
               {TRANSACTION_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
-          </label>
+          </label>}
           <div>
             <button
               type="button"
@@ -869,12 +975,19 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
               <input required type="date" value={date} onChange={(event) => setDate(event.target.value)} className={`${inputClass} mt-1`} />
             </label>
           </div>
-          <label className="block text-sm font-medium">Linked account (optional)
+          {type === "transfer" ? <div>
+            <label className="block text-sm font-medium">Add to investment account
+              <select required value={accountId} onChange={(event) => setAccountId(event.target.value)} className={`${inputClass} mt-1`}>
+                <option value="">Choose a destination account</option>
+                {finance.accounts.filter((item) => !item.archived && item.kind === (transferDestination === "brokerage" ? "brokerage" : transferDestination === "retirement" ? "retirement" : transferDestination === "cash" ? "savings" : "")).map((item) => <option key={item.id} value={item.id}>{item.name} · current balance {formatMoney(item.balanceMinor, currency)}</option>)}
+              </select>
+            </label>
+          </div> : <label className="block text-sm font-medium">Linked account (optional)
             <select value={accountId} onChange={(event) => setAccountId(event.target.value)} className={`${inputClass} mt-1`}>
               <option value="">No linked account</option>
-              {finance.accounts.filter((item) => !item.archived && (type !== "transfer" || (transferDestination === "brokerage" ? item.kind === "brokerage" : transferDestination === "cash" ? item.kind === "savings" : false))).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {finance.accounts.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
-          </label>
+          </label>}
           <div className="flex gap-2">
             <button className={buttonClass}>{editing ? "Save" : "Add"}</button>
             {editing && <button type="button" onClick={() => setEditing(undefined)} className={secondaryButtonClass}>Cancel</button>}
@@ -921,18 +1034,18 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
     </div>
     {showTransferDialog && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelTransferDialog(); }}>
       <section role="dialog" aria-modal="true" aria-labelledby="transfer-dialog-title" className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-        <h2 id="transfer-dialog-title" className="text-lg font-bold">Where should this transfer go?</h2>
-        <p className="mt-2 text-sm text-slate-600">Choose the destination. The transfer will be recorded under that investment type.</p>
-        <div className="mt-5 grid grid-cols-2 gap-3">
-          {([ ["brokerage", "Brokerage"], ["cash", "Cash"] ] as const).map(([destination, label]) => <button key={destination} type="button" onClick={() => {
+        <h2 id="transfer-dialog-title" className="text-lg font-bold">Choose the destination type</h2>
+        <p className="mt-2 text-sm text-slate-600">Select which investment category should receive this transfer.</p>
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {([ ["brokerage", "Brokerage"], ["retirement", "401(k)"], ["cash", "Cash"] ] as const).map(([destination, label]) => <button key={destination} type="button" onClick={() => {
             setTransferDestination(destination);
             setAccountId("");
             setShowTransferDialog(false);
           }} className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-5 text-left font-semibold text-teal-900 transition hover:border-teal-400 hover:bg-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-600">
-            {label}<span className="mt-1 block text-xs font-normal text-teal-800">{destination === "brokerage" ? "Brokerage account" : "Personal savings / cash"}</span>
+            {label}<span className="mt-1 block text-xs font-normal text-teal-800">{destination === "brokerage" ? "Brokerage account" : destination === "retirement" ? "401(k) account" : "Personal savings / cash"}</span>
           </button>)}
         </div>
-        <p className="mt-4 text-xs text-slate-500">Account balances stay manually maintained; this entry records activity only.</p>
+        <p className="mt-4 text-xs text-slate-500">Paycheck income is recorded separately. This allocation adds to one selected account without counting the income twice.</p>
         <div className="mt-5 flex justify-end"><button type="button" onClick={cancelTransferDialog} className={secondaryButtonClass}>Cancel</button></div>
       </section>
     </div>}
@@ -1134,15 +1247,14 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
   );
 }
 
-function InvestmentsSection({ finance, currency, uid, memberNames, editing, setEditing, snapshots, onSaveAccount, onDeleteAccount, onSnapshot, onSaveManualValue, onDeleteManualValue }: {
+function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, snapshots, onSaveAccount, onDeleteAccount, onSnapshot, onSaveManualValue, onDeleteManualValue }: {
   finance: HouseholdFinanceData;
   currency: string;
   uid: string;
   memberNames: Map<string, string>;
-  editing?: FinancialAccount;
-  setEditing: (account?: FinancialAccount) => void;
+  darkMode: boolean;
   snapshots: Record<string, AccountSnapshot[]>;
-  onSaveAccount: (input: Pick<FinancialAccount, "name" | "kind" | "ownerUid" | "balanceMinor">, existing?: FinancialAccount) => Promise<void>;
+  onSaveAccount: (input: Pick<FinancialAccount, "name" | "kind" | "ownerUid" | "balanceMinor">) => Promise<void>;
   onDeleteAccount: (id: string) => Promise<void>;
   onSnapshot: (accountId: string, month: string, amount: number) => Promise<void>;
   onSaveManualValue: (group: "assets" | "liabilities", input: Pick<ManualValueRecord, "name" | "amountMinor" | "ownerUid">, existing?: ManualValueRecord) => Promise<void>;
@@ -1164,7 +1276,6 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
   const [manualValueError, setManualValueError] = useState("");
   const [chartMonth, setChartMonth] = useState("");
   const [activeChartMonth, setActiveChartMonth] = useState("");
-  const accountEditorRef = useEditFocus<HTMLElement>(editing?.id);
   const manualValueEditorRef = useEditFocus<HTMLElement>(editingManualValue?.id);
 
   useEffect(() => {
@@ -1175,11 +1286,8 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
   }, []);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setName(editing?.name ?? "");
-    setKind(editing?.kind ?? "savings");
-    setOwnerUid(editing?.ownerUid ?? uid);
-    setBalance(moneyInputValue(editing?.balanceMinor, currency));
-  }, [editing, uid, currency]);
+    setOwnerUid(uid);
+  }, [uid]);
 
   const columns = [
     { kind: "brokerage", title: "Brokerage", destination: "brokerage" },
@@ -1194,13 +1302,13 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
       && transaction.purpose === "investment")
     .reduce((sum, transaction) => sum + transaction.amountMinor, 0);
   const recentInvestmentActivity = [
-    ...accounts.map((account) => ({
+    ...accounts.filter((account) => account.createdAt.toMillis() === account.updatedAt.toMillis()).map((account) => ({
       id: `account-${account.id}`,
       kind: "account" as const,
       timestamp: account.updatedAt.toMillis(),
       date: new Date(account.updatedAt.toMillis()).toLocaleDateString(),
       title: account.name,
-      detail: account.createdAt.toMillis() === account.updatedAt.toMillis() ? "Account added" : "Balance updated",
+      detail: "Account added",
       ownerUid: account.ownerUid,
       amountMinor: account.balanceMinor,
     })),
@@ -1213,7 +1321,8 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
         date: transaction.date,
         title: transaction.description || transaction.category,
         detail: transaction.type === "transfer"
-          ? transaction.transferDestination === "brokerage" ? "Transfer to brokerage" : transaction.transferDestination === "cash" ? "Transfer to cash" : "Transfer"
+          ? `Paycheck allocation · ${finance.accounts.find((account) => account.id === transaction.accountId)?.name
+            ?? (transaction.transferDestination === "brokerage" ? "Brokerage" : transaction.transferDestination === "retirement" ? "401(k)" : transaction.transferDestination === "cash" ? "Cash" : "investment account")}`
           : "Investment contribution",
         ownerUid: transaction.ownerUid,
         amountMinor: transaction.amountMinor,
@@ -1226,9 +1335,9 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
   }) : [];
   const chartSeries = [
-    { kind: "brokerage", label: "Brokerage", color: "#0f766e", dash: "", marker: "circle" },
-    { kind: "retirement", label: "401(k)", color: "#4f46e5", dash: "8 5", marker: "square" },
-    { kind: "savings", label: "Cash", color: "#c2410c", dash: "2 5", marker: "diamond" },
+    { kind: "brokerage", label: "Brokerage", color: darkMode ? "#2dd4bf" : "#0f766e", dash: "", marker: "circle" },
+    { kind: "retirement", label: "401(k)", color: darkMode ? "#a5b4fc" : "#4f46e5", dash: "8 5", marker: "square" },
+    { kind: "savings", label: "Cash", color: darkMode ? "#fb923c" : "#c2410c", dash: "2 5", marker: "diamond" },
   ] as const;
   type ChartMonth = { month: string; brokerage: number | null; retirement: number | null; savings: number | null };
   const monthlyPoints: ChartMonth[] = monthKeys.map((monthKey) => {
@@ -1263,8 +1372,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
     event.preventDefault();
     setAccountError("");
     try {
-      await onSaveAccount({ name: name.trim(), kind, ownerUid, balanceMinor: parseMoneyToMinorUnits(balance, currency) }, editing);
-      setEditing(undefined);
+      await onSaveAccount({ name: name.trim(), kind, ownerUid, balanceMinor: parseMoneyToMinorUnits(balance, currency) });
       setName("");
       setBalance("");
     } catch (cause) {
@@ -1274,7 +1382,6 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
   async function removeAccount(account: FinancialAccount) {
     if (!window.confirm(`Permanently delete ${account.name} and its saved monthly snapshots? Linked transactions will remain in your history.`)) return;
     await onDeleteAccount(account.id);
-    if (editing?.id === account.id) setEditing(undefined);
     if (snapshotAccount === account.id) setSnapshotAccount("");
   }
   async function submitSnapshot(event: FormEvent<HTMLFormElement>) {
@@ -1307,7 +1414,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
     <FeatureHeading section="Investments" title="Investments" description="Review account balances, compare performance, and record monthly snapshots." />
     <section className="group space-y-5 rounded-2xl border border-slate-200 bg-white p-6 transition-all duration-200 hover:border-teal-200 hover:shadow-md">
       <div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><span className="rounded-2xl bg-teal-50 p-3 text-teal-800 transition-transform duration-200 group-hover:scale-105"><WorkspaceIcon section="Investments" /></span><div><p className="text-sm font-medium text-slate-500">Total investments</p><p className="mt-1 text-4xl font-bold tracking-tight">{formatMoney(total, currency)}</p></div></div><div className="rounded-xl bg-emerald-50 px-4 py-3 text-right"><p className="text-xs font-medium text-emerald-800">Contributed this month</p><p className="mt-1 text-lg font-bold text-emerald-900">{formatMoney(monthlyInvestmentContribution, currency)}</p></div></div>
-      <p className="mt-3 text-sm text-slate-500">Total includes manually maintained Brokerage, 401(k), and Cash balances. Contributions are shown separately so they are not double-counted.</p>
+      <p className="mt-3 text-sm text-slate-500">Account balances start with the opening amount and increase with paycheck allocations. Paycheck income is recorded separately.</p>
     <section className="grid gap-4 lg:grid-cols-3">{columns.map((column) => {
       const columnAccounts = accounts.filter((account) => account.kind === column.kind);
       const columnTotal = columnAccounts.reduce((sum, account) => sum + account.balanceMinor, 0);
@@ -1318,7 +1425,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
           const memberBalance = columnAccounts.filter((account) => account.ownerUid === memberUid).reduce((sum, account) => sum + account.balanceMinor, 0);
           return <div key={memberUid} className="flex justify-between gap-3 py-2"><p className="text-sm font-medium">{memberNames.get(memberUid) ?? "Member"}</p><p className="text-sm font-semibold">{formatMoney(memberBalance, currency)}</p></div>;
         })}{!memberUids.length && <p className="py-2 text-sm text-slate-500">No member balances yet.</p>}</div>
-        {columnAccounts.length > 0 && <div className="mt-4 border-t border-slate-100 pt-3">{columnAccounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-2 py-1 text-xs text-slate-600"><span>{account.name} · {memberNames.get(account.ownerUid) ?? "Member"}</span><span className="flex items-center gap-2"><span>{formatMoney(account.balanceMinor, currency)}</span><button type="button" onClick={() => setEditing(account)} className="font-semibold text-teal-800 underline">Edit balance</button></span></div>)}</div>}
+        {columnAccounts.length > 0 && <div className="mt-4 border-t border-slate-100 pt-3">{columnAccounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-2 py-1 text-xs text-slate-600"><span>{account.name} · {memberNames.get(account.ownerUid) ?? "Member"}</span><span>{formatMoney(account.balanceMinor, currency)}</span></div>)}</div>}
       </article>;
     })}</section>
     <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5 sm:p-6">
@@ -1327,7 +1434,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
         <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-medium text-slate-600">{chartSeries.map((series) => <span key={series.kind} className="inline-flex items-center gap-2"><svg aria-hidden="true" width="24" height="10" viewBox="0 0 24 10"><line x1="1" y1="5" x2="23" y2="5" stroke={series.color} strokeWidth="3" strokeDasharray={series.dash || undefined} /></svg>{series.label}</span>)}</div>
       </div>
       <p className="mt-2 text-xs text-slate-500">Past months use available saved snapshots; the current month uses latest balances. Missing snapshots show as —.</p>
-      {chartMonth ? <div className="mt-4 overflow-x-auto rounded-xl bg-slate-50/80 p-2 sm:p-4">
+      {chartMonth ? <div className="investment-chart-container mt-4 overflow-x-auto rounded-xl p-2 sm:p-4">
         <svg viewBox="0 0 730 205" role="group" aria-label="Interactive 12-month investment balance chart" className="h-64 min-w-[680px] w-full overflow-visible">
           {[0, 1, 2, 3].map((step) => {
             const y = 150 - step * 40;
@@ -1361,7 +1468,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, editing, setE
     </div>
     </section>
     <section className="grid gap-6 xl:grid-cols-2">
-      <section ref={accountEditorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">{editing ? "Edit account" : "Add an account"}</h2><p className="mt-1 text-xs text-slate-500">Balances are manual and in {currency}. Saving a balance records this month’s snapshot.</p><form onSubmit={submitAccount} className="mt-4 space-y-3"><input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} /><select value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="savings">Cash / Personal Savings</option><option value="brokerage">Brokerage</option><option value="retirement">Retirement / 401(k)</option></select><select value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select><input required inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Current balance" className={inputClass} /><div className="flex gap-2"><button className={buttonClass}>{editing ? "Save" : "Add"}</button>{editing && <button type="button" onClick={() => setEditing(undefined)} className={secondaryButtonClass}>Cancel</button>}</div>{accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}</form><div className="mt-5 border-t border-slate-100 pt-4"><h3 className="font-semibold">Household accounts</h3><div className="mt-2 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span>{!account.archived && <button type="button" onClick={() => setEditing(account)} className="text-xs font-semibold text-teal-800 underline">Edit</button>}<button type="button" onClick={() => void removeAccount(account)} className="text-xs font-semibold text-red-700 underline">Delete</button></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div></div></section>
+      <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Add an account</h2><p className="mt-1 text-xs text-slate-500">Enter the opening balance for this account in {currency}. Future balance changes are recorded as transfers.</p><form onSubmit={submitAccount} className="mt-4 space-y-3"><input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} /><select value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="savings">Cash / Personal Savings</option><option value="brokerage">Brokerage</option><option value="retirement">Retirement / 401(k)</option></select><select value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select><input required inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Opening balance" className={inputClass} /><button className={buttonClass}>Add account</button>{accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}</form><div className="mt-5 border-t border-slate-100 pt-4"><h3 className="font-semibold">Household accounts</h3><div className="mt-2 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span><button type="button" onClick={() => void removeAccount(account)} className="text-xs font-semibold text-red-700 underline">Delete</button></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div></div></section>
       <section ref={manualValueEditorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold">Household assets &amp; liabilities</h2>
         <p className="mt-1 text-xs text-slate-500">Record assets and debts. Assets increase household net worth; liabilities reduce it.</p>

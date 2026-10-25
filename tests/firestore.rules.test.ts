@@ -22,8 +22,8 @@ import {
 } from "firebase/firestore";
 import { getHouseholdsForUser } from "../src/lib/household-memberships";
 import { acceptHouseholdInvitation, createHouseholdInvitation } from "../src/lib/invitations";
-import { copyPreviousMonthBudgets, deleteAccount } from "../src/lib/finance";
-import { DEFAULT_CATEGORIES, type MonthlyBudget } from "../src/lib/types";
+import { copyPreviousMonthBudgets, deleteAccount, deleteTransaction, saveTransaction } from "../src/lib/finance";
+import { DEFAULT_CATEGORIES, type FinancialTransaction, type MonthlyBudget } from "../src/lib/types";
 
 const projectId = "demo-household-hq";
 const householdId = "family-home";
@@ -285,12 +285,24 @@ test("authorized members can use financial records while unrelated users and unk
   const mallory = testEnv.authenticatedContext("mallory").firestore();
 
   for (const database of [alice, bob]) {
+    const uid = database === alice ? "alice" : "bob";
     await assertSucceeds(getDocs(collection(database, "households", householdId, "categories")));
+    await assertSucceeds(setDoc(doc(database, "households", householdId, "recurringPayments", `${uid}-one-time`), {
+      name: "One-time bill", amountMinor: 2500, dueDay: 18, frequency: "once", monthKey: "2026-10",
+      createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(database, "households", householdId, "recurringPayments", `${uid}-missing-month`), {
+      name: "Invalid one-time bill", amountMinor: 2500, dueDay: 18, frequency: "once",
+      createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(database, "households", householdId, "recurringPayments", `${uid}-invalid-month`), {
+      name: "Invalid month bill", amountMinor: 2500, dueDay: 18, frequency: "once", monthKey: "2026-13",
+      createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
     await assertSucceeds(setDoc(doc(database, "households", householdId, "budgets", `${database === alice ? "alice" : "bob"}-budget`), {
       month: "2026-10", category: "Groceries", limitMinor: 50000,
       createdBy: database === alice ? "alice" : "bob", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
-    const uid = database === alice ? "alice" : "bob";
     await assertSucceeds(setDoc(doc(database, "households", householdId, "budgets", `${uid}-yearly-budget`), {
       month: "2026-01", period: "yearly", category: "Groceries", limitMinor: 600000,
       createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
@@ -312,15 +324,28 @@ test("authorized members can use financial records while unrelated users and unk
       date: "2026-10-01", accountId: null, ownerUid: uid, createdBy: uid,
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
-    await assertSucceeds(setDoc(doc(database, "households", householdId, "transactions", `${uid}-transfer`), {
-      type: "transfer", purpose: "investment", transferDestination: "brokerage", category: "Savings and expenses", description: "Move to brokerage", amountMinor: 25000,
-      date: "2026-10-02", accountId: null, ownerUid: uid, createdBy: uid,
+    for (const [accountId, kind] of [[`${uid}-cash`, "savings"], [`${uid}-brokerage`, "brokerage"], [`${uid}-retirement`, "retirement"]] as const) {
+      await assertSucceeds(setDoc(doc(database, "households", householdId, "accounts", accountId), {
+        name: accountId, kind, ownerUid: uid, balanceMinor: 500000, currency: "USD", archived: false,
+        createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      }));
+    }
+    await assertFails(setDoc(doc(database, "households", householdId, "transactions", `${uid}-missing-source-transfer`), {
+      type: "transfer", purpose: "investment", transferDestination: "brokerage", category: "Savings and expenses", description: "Missing source account", amountMinor: 1,
+      date: "2026-10-02", accountId: `${uid}-brokerage`, sourceAccountId: null, ledgerApplied: true, ownerUid: uid, createdBy: uid,
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
-    await assertSucceeds(setDoc(doc(database, "households", householdId, "transactions", `${uid}-savings-transfer`), {
+    await assertSucceeds(saveTransaction(database as unknown as Firestore, householdId, uid, {
+      type: "transfer", purpose: "investment", transferDestination: "brokerage", category: "Savings and expenses", description: "Move to brokerage", amountMinor: 25000,
+      date: "2026-10-02", accountId: `${uid}-brokerage`, sourceAccountId: `${uid}-cash`, ownerUid: uid,
+    }));
+    await assertSucceeds(saveTransaction(database as unknown as Firestore, householdId, uid, {
       type: "transfer", purpose: "investment", transferDestination: "cash", category: "Savings and expenses", description: "Savings contribution", amountMinor: 15000,
-      date: "2026-10-02", accountId: null, ownerUid: uid, createdBy: uid,
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      date: "2026-10-02", accountId: `${uid}-cash`, sourceAccountId: `${uid}-brokerage`, ownerUid: uid,
+    }));
+    await assertSucceeds(saveTransaction(database as unknown as Firestore, householdId, uid, {
+      type: "transfer", purpose: "investment", transferDestination: "retirement", category: "Savings and expenses", description: "Retirement contribution", amountMinor: 15000,
+      date: "2026-10-02", accountId: `${uid}-retirement`, sourceAccountId: `${uid}-cash`, ownerUid: uid,
     }));
     await assertFails(setDoc(doc(database, "households", householdId, "transactions", `${uid}-custom-category`), {
       type: "debit", purpose: "ordinary", transferDestination: null, category: "Unlisted category", description: "Should be rejected", amountMinor: 1000,
@@ -345,6 +370,106 @@ test("authorized members can use financial records while unrelated users and unk
   await assertFails(getDoc(doc(mallory, "households", householdId, "goals", "alice-goal")));
   await assertSucceeds(getDocs(collection(alice, "households", householdId, "recurringPayments")));
   await assertFails(getDoc(doc(alice, "households", householdId, "recurringPayments", "bill", "paymentOccurrences", "october")));
+});
+
+test("household activity is immutable and last-seen timestamps are private to each member", async () => {
+  await createHouseholdAtomically("alice");
+  await addMemberAtomically("alice", "bob");
+  const alice = testEnv.authenticatedContext("alice").firestore();
+  const bob = testEnv.authenticatedContext("bob").firestore();
+  const mallory = testEnv.authenticatedContext("mallory").firestore();
+  const activity = doc(alice, "households", householdId, "activity", "event-1");
+
+  await assertSucceeds(setDoc(activity, {
+    actorUid: "alice", actorName: "Alice", summary: "A budget was saved.", createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(bob, "households", householdId, "activity", "event-1")));
+  await assertFails(updateDoc(activity, { summary: "Changed" }));
+  await assertFails(setDoc(doc(mallory, "households", householdId, "activity", "event-2"), {
+    actorUid: "mallory", actorName: "Mallory", summary: "Unauthorized update", createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(updateDoc(doc(bob, "users", "bob", "households", householdId), { lastSeenAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(alice, "users", "bob", "households", householdId), { lastSeenAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(alice, "users", "alice", "households", householdId), { createdAt: serverTimestamp() }));
+});
+
+test("investment transfers atomically move balances and reverse correctly on edit and delete", async () => {
+  const database = await createHouseholdAtomically("alice");
+  const accounts = collection(database, "households", householdId, "accounts");
+  for (const [id, kind, balanceMinor] of [
+    ["cash", "savings", 10000],
+    ["brokerage", "brokerage", 100],
+    ["retirement", "retirement", 200],
+  ] as const) {
+    await assertSucceeds(setDoc(doc(accounts, id), {
+      name: id, kind, ownerUid: "alice", balanceMinor, currency: "USD", archived: false,
+      createdBy: "alice", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+  }
+  const transferInput = {
+    type: "transfer" as const,
+    purpose: "investment" as const,
+    transferDestination: "brokerage" as const,
+    category: "Savings and expenses",
+    description: "Transfer",
+    amountMinor: 2500,
+    date: "2026-10-02",
+    accountId: "brokerage",
+    sourceAccountId: "cash",
+    ownerUid: "alice",
+  };
+  const transactionId = await saveTransaction(database as unknown as Firestore, householdId, "alice", transferInput);
+  assert.ok(transactionId);
+  assert.equal((await getDoc(doc(accounts, "cash"))).data()?.balanceMinor, 7500);
+  assert.equal((await getDoc(doc(accounts, "brokerage"))).data()?.balanceMinor, 2600);
+
+  const savedTransfer = (await getDoc(doc(database, "households", householdId, "transactions", transactionId))).data();
+  await saveTransaction(database as unknown as Firestore, householdId, "alice", {
+    ...transferInput,
+    transferDestination: "retirement",
+    accountId: "retirement",
+    amountMinor: 1500,
+  }, { id: transactionId, ...savedTransfer } as FinancialTransaction);
+  assert.equal((await getDoc(doc(accounts, "cash"))).data()?.balanceMinor, 8500);
+  assert.equal((await getDoc(doc(accounts, "brokerage"))).data()?.balanceMinor, 100);
+  assert.equal((await getDoc(doc(accounts, "retirement"))).data()?.balanceMinor, 1700);
+
+  await assert.rejects(deleteAccount(database as unknown as Firestore, householdId, "retirement"), /Delete transfers linked/);
+  await assert.rejects(saveTransaction(database as unknown as Firestore, householdId, "alice", {
+    ...transferInput,
+    amountMinor: 9000,
+  }));
+  await deleteTransaction(database as unknown as Firestore, householdId, transactionId);
+  assert.equal((await getDoc(doc(accounts, "cash"))).data()?.balanceMinor, 10000);
+  assert.equal((await getDoc(doc(accounts, "retirement"))).data()?.balanceMinor, 200);
+});
+
+test("paycheck allocations add to a selected investment account without a source account", async () => {
+  const database = await createHouseholdAtomically("alice");
+  const accounts = collection(database, "households", householdId, "accounts");
+  await assertSucceeds(setDoc(doc(accounts, "brokerage"), {
+    name: "Brokerage", kind: "brokerage", ownerUid: "alice", balanceMinor: 10000, currency: "USD", archived: false,
+    createdBy: "alice", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  const transactionId = await saveTransaction(database as unknown as Firestore, householdId, "alice", {
+    type: "transfer",
+    purpose: "investment",
+    transferDestination: "brokerage",
+    category: "Paycheck transfer",
+    description: "Monthly paycheck allocation",
+    amountMinor: 2500,
+    date: "2026-10-02",
+    accountId: "brokerage",
+    sourceAccountId: null,
+    ownerUid: "alice",
+  });
+  assert.equal((await getDoc(doc(accounts, "brokerage"))).data()?.balanceMinor, 12500);
+  const saved = (await getDoc(doc(database, "households", householdId, "transactions", transactionId))).data();
+  assert.equal(saved?.category, "Paycheck transfer");
+  assert.equal(saved?.sourceAccountId, null);
+  assert.equal(saved?.ledgerApplied, true);
+  await deleteTransaction(database as unknown as Firestore, householdId, transactionId);
+  assert.equal((await getDoc(doc(accounts, "brokerage"))).data()?.balanceMinor, 10000);
 });
 
 test("copying previous month budgets updates matching categories and adds missing categories", async () => {

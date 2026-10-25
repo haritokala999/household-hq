@@ -83,7 +83,7 @@ export default function HouseholdSetupPage() {
     <AuthGuard>
       <main className="flex min-h-screen flex-col bg-[#f3f7f5] text-slate-900">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:px-8">
-          <div><p className="font-bold">Household HQ</p><p className="text-xs text-slate-500">Your money, together.</p></div>
+          <div><p className="font-bold">Household HQ</p><p className="text-xs text-slate-500">One home. One financial plan.</p></div>
           <div className="flex items-center gap-3">
             {signOutError && <p role="alert" className="max-w-xs text-sm text-red-700">{signOutError}</p>}
             <button disabled={signingOut} onClick={handleSignOut} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-60">

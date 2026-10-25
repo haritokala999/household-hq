@@ -66,16 +66,26 @@ export type FinancialTransaction = {
   id: string;
   type: "credit" | "debit" | "transfer";
   purpose: "income" | "ordinary" | "investment";
-  transferDestination: "brokerage" | "cash" | null;
+  transferDestination: "brokerage" | "retirement" | "cash" | null;
   category: string;
   description: string;
   amountMinor: number;
   date: string;
   accountId: string | null;
+  sourceAccountId?: string | null;
+  ledgerApplied?: boolean;
   ownerUid: string;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+};
+
+export type HouseholdActivity = {
+  id: string;
+  actorUid: string;
+  actorName: string;
+  summary: string;
+  createdAt: Timestamp;
 };
 
 export type MonthlyBudget = {
@@ -106,6 +116,8 @@ export type RecurringPayment = {
   name: string;
   amountMinor: number;
   dueDay: number;
+  frequency?: "monthly" | "once";
+  monthKey?: string;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;

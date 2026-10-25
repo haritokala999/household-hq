@@ -75,6 +75,30 @@ test("financial summary separates income, ordinary expenses, investment, and net
   });
 });
 
+test("paycheck allocations increase one destination balance without counting paycheck income twice", () => {
+  const summary = calculateFinanceSummary({
+    accounts: [{ balanceMinor: 125000, archived: false }] as never,
+    assets: [] as never,
+    liabilities: [] as never,
+    transactions: [
+      transaction({ type: "credit", purpose: "income", category: "Paycheck", amountMinor: 80000 }),
+      transaction({
+        type: "transfer",
+        purpose: "investment",
+        transferDestination: "brokerage",
+        category: "Paycheck transfer",
+        accountId: "brokerage",
+        amountMinor: 25000,
+      }),
+    ],
+  }, "2026-10");
+  assert.equal(summary.assetsMinor, 125000);
+  assert.equal(summary.netWorthMinor, 125000);
+  assert.equal(summary.incomeMinor, 80000);
+  assert.equal(summary.investmentContributionsMinor, 25000);
+  assert.equal(summary.availableToSpendMinor, 55000);
+});
+
 test("budget progress filters month, ordinary debits, and category and reports overspending", () => {
   const result = budgetProgress({ id: "b", month: "2026-10", category: "Groceries", limitMinor: 1500 } as never, [
     transaction({ amountMinor: 1000 }),
@@ -132,9 +156,11 @@ test("goal progress uses precise bounded percentages", () => {
 
 test("new households initialize required income, expense, and investment categories", () => {
   assert.ok(TRANSACTION_CATEGORIES.includes("Paycheck"));
+  assert.ok(TRANSACTION_CATEGORIES.includes("Paycheck transfer"));
   assert.ok(TRANSACTION_CATEGORIES.includes("India Transfer"));
   assert.ok(BUDGET_CATEGORIES.includes("India Transfer"));
   assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Paycheck"));
+  assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Paycheck transfer"));
   assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Savings and expenses"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Paycheck" && category.kind === "income"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Groceries" && category.kind === "expense"));
