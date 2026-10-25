@@ -247,9 +247,15 @@ service cloud.firestore {
         'Travel',
         'Savings and expenses',
         'Health and fitness',
-        'India Loan',
+        'India Transfer',
         'MISC'
       ];
+    }
+
+    function validBudgetCategory(category) {
+      return validTransactionCategory(category)
+        && category != 'Paycheck'
+        && category != 'Savings and expenses';
     }
 
     function validTransaction(data, householdId, uid, isCreate) {
@@ -279,7 +285,8 @@ service cloud.firestore {
       return data.keys().hasAll(['month', 'category', 'limitMinor', 'createdBy', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['month', 'category', 'limitMinor', 'createdBy', 'createdAt', 'updatedAt'])
         && data.month is string && data.month.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
-        && validName(data.category, 80)
+        && (validBudgetCategory(data.category)
+          || (!isCreate && data.category == resource.data.category))
         && validAmount(data.limitMinor, true)
         && data.createdBy == (isCreate ? uid : resource.data.createdBy)
         && data.createdAt == (isCreate ? request.time : resource.data.createdAt)

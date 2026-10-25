@@ -12,6 +12,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -280,6 +281,10 @@ test("authorized members can use financial records while unrelated users and unk
       createdBy: database === alice ? "alice" : "bob", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
     const uid = database === alice ? "alice" : "bob";
+    await assertFails(setDoc(doc(database, "households", householdId, "budgets", `${uid}-paycheck-budget`), {
+      month: "2026-10", category: "Paycheck", limitMinor: 50000,
+      createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
     await assertSucceeds(setDoc(doc(database, "households", householdId, "transactions", `${uid}-paycheck`), {
       type: "credit", purpose: "income", transferDestination: null, category: "Paycheck", description: "Monthly pay", amountMinor: 500000,
       date: "2026-10-01", accountId: null, ownerUid: uid, createdBy: uid,
@@ -300,9 +305,14 @@ test("authorized members can use financial records while unrelated users and unk
       date: "2026-10-03", accountId: null, ownerUid: uid, createdBy: uid,
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
-    await assertSucceeds(setDoc(doc(database, "households", householdId, "goals", `${uid}-goal`), {
+    const goalReference = doc(database, "households", householdId, "goals", `${uid}-goal`);
+    await assertSucceeds(setDoc(goalReference, {
       name: "Emergency fund", targetMinor: 1000000, currentMinor: 100000, deadline: "2027-12-31", ownerUid: uid,
       createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(updateDoc(goalReference, {
+      currentMinor: increment(50000),
+      updatedAt: serverTimestamp(),
     }));
   }
   await assertFails(getDoc(doc(mallory, "households", householdId, "categories", "cat-groceries")));

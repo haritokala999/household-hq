@@ -4,6 +4,7 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  increment,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -30,11 +31,14 @@ export const TRANSACTION_CATEGORIES = [
   "Travel",
   "Savings and expenses",
   "Health and fitness",
-  "India Loan",
+  "India Transfer",
   "MISC",
 ] as const;
 
 export const SAVINGS_CATEGORY = "Savings and expenses";
+export const BUDGET_CATEGORIES = TRANSACTION_CATEGORIES.filter(
+  (category) => category !== "Paycheck" && category !== SAVINGS_CATEGORY,
+);
 
 export type HouseholdFinanceData = {
   accounts: FinancialAccount[];
@@ -118,6 +122,11 @@ export function formatMoney(minor: number, currency: string): string {
 
 export function currentMonthKey(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+export function goalProgressPercent(currentMinor: number, targetMinor: number): number {
+  if (!Number.isFinite(currentMinor) || !Number.isFinite(targetMinor) || targetMinor <= 0) return 0;
+  return Math.min(100, Math.max(0, currentMinor / targetMinor * 100));
 }
 
 export function isMonthKey(value: string): boolean {
@@ -285,6 +294,10 @@ export async function saveBudget(
 ) {
   positiveMinorAmount(input.limitMinor, "Budget");
   if (!isMonthKey(input.month)) throw new Error("Choose a valid budget month.");
+  if (!(BUDGET_CATEGORIES as readonly string[]).includes(input.category)
+    && input.category !== existing?.category) {
+    throw new Error("Choose a category used for household expenses.");
+  }
   const reference = existing
     ? doc(database, ...path(householdId, "budgets"), existing.id)
     : doc(collection(database, ...path(householdId, "budgets")));
@@ -320,6 +333,21 @@ export async function saveGoal(
     updatedAt: serverTimestamp(),
   });
   return reference.id;
+}
+
+export async function addGoalProgress(
+  database: Firestore,
+  householdId: string,
+  goalId: string,
+  amountMinor: number,
+) {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+    throw new Error("Progress update must be a positive amount in cents.");
+  }
+  await updateDoc(doc(database, ...path(householdId, "goals"), goalId), {
+    currentMinor: increment(amountMinor),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 type ValueInput = Pick<ManualValueRecord, "name" | "amountMinor" | "ownerUid">;

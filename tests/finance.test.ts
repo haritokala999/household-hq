@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  BUDGET_CATEGORIES,
   budgetProgress,
   calculateFinanceSummary,
+  goalProgressPercent,
   isCalendarDate,
   isMonthKey,
   parseMoneyToMinorUnits,
@@ -80,8 +82,20 @@ test("month and calendar dates are strictly validated", () => {
   assert.equal(isCalendarDate("2026-04-31"), false);
 });
 
+test("goal progress uses precise bounded percentages", () => {
+  assert.equal(goalProgressPercent(0, 10000), 0);
+  assert.equal(goalProgressPercent(1, 10000), 0.01);
+  assert.equal(goalProgressPercent(2500, 10000), 25);
+  assert.equal(goalProgressPercent(15000, 10000), 100);
+  assert.equal(goalProgressPercent(100, 0), 0);
+});
+
 test("new households initialize required income, expense, and investment categories", () => {
   assert.ok(TRANSACTION_CATEGORIES.includes("Paycheck"));
+  assert.ok(TRANSACTION_CATEGORIES.includes("India Transfer"));
+  assert.ok(BUDGET_CATEGORIES.includes("India Transfer"));
+  assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Paycheck"));
+  assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Savings and expenses"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Paycheck" && category.kind === "income"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Groceries" && category.kind === "expense"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.kind === "investment"));
