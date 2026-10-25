@@ -22,7 +22,8 @@ import {
 } from "firebase/firestore";
 import { getHouseholdsForUser } from "../src/lib/household-memberships";
 import { acceptHouseholdInvitation, createHouseholdInvitation } from "../src/lib/invitations";
-import { DEFAULT_CATEGORIES } from "../src/lib/types";
+import { copyPreviousMonthBudgets, deleteAccount } from "../src/lib/finance";
+import { DEFAULT_CATEGORIES, type MonthlyBudget } from "../src/lib/types";
 
 const projectId = "demo-household-hq";
 const householdId = "family-home";
@@ -281,6 +282,18 @@ test("authorized members can use financial records while unrelated users and unk
       createdBy: database === alice ? "alice" : "bob", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
     const uid = database === alice ? "alice" : "bob";
+    await assertSucceeds(setDoc(doc(database, "households", householdId, "budgets", `${uid}-yearly-budget`), {
+      month: "2026-01", period: "yearly", category: "Groceries", limitMinor: 600000,
+      createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(database, "households", householdId, "budgets", `${uid}-invalid-period-budget`), {
+      month: "2026-01", period: "weekly", category: "Groceries", limitMinor: 600000,
+      createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(database, "households", householdId, "budgets", `${uid}-invalid-year-month-budget`), {
+      month: "2026-10", period: "yearly", category: "Groceries", limitMinor: 600000,
+      createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
     await assertFails(setDoc(doc(database, "households", householdId, "budgets", `${uid}-paycheck-budget`), {
       month: "2026-10", category: "Paycheck", limitMinor: 50000,
       createdBy: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
@@ -325,6 +338,48 @@ test("authorized members can use financial records while unrelated users and unk
   await assertFails(getDoc(doc(alice, "households", householdId, "recurringPayments", "bill", "paymentOccurrences", "october")));
 });
 
+test("copying previous month budgets updates matching categories and adds missing categories", async () => {
+  const database = await createHouseholdAtomically("alice");
+  const budgets = collection(database, "households", householdId, "budgets");
+  await assertSucceeds(setDoc(doc(budgets, "previous-groceries"), {
+    month: "2026-09", category: "Groceries", limitMinor: 55000,
+    createdBy: "alice", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(budgets, "previous-shopping"), {
+    month: "2026-09", category: "Shopping", limitMinor: 25000,
+    createdBy: "alice", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(budgets, "current-groceries"), {
+    month: "2026-10", category: "Groceries", limitMinor: 40000,
+    createdBy: "alice", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(budgets, "current-housing"), {
+    month: "2026-10", category: "Housing & utilities", limitMinor: 150000,
+    createdBy: "alice", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }));
+
+  const existing = (await getDocs(budgets)).docs.map((item) => ({
+    id: item.id,
+    ...item.data(),
+  }) as MonthlyBudget);
+  const result = await copyPreviousMonthBudgets(
+    database as unknown as Firestore,
+    householdId,
+    "alice",
+    "2026-09",
+    "2026-10",
+    existing,
+  );
+
+  assert.deepEqual(result, { added: 1, updated: 1 });
+  const targetBudgets = (await getDocs(budgets)).docs
+    .map((item) => item.data())
+    .filter((budget) => budget.month === "2026-10");
+  assert.equal(targetBudgets.find((budget) => budget.category === "Groceries")?.limitMinor, 55000);
+  assert.equal(targetBudgets.find((budget) => budget.category === "Shopping")?.limitMinor, 25000);
+  assert.equal(targetBudgets.find((budget) => budget.category === "Housing & utilities")?.limitMinor, 150000);
+});
+
 test("strong invitation code lets an unverified signed-in user join once and discovers household", async () => {
   await createHouseholdAtomically("alice");
   const alice = testEnv.authenticatedContext("alice").firestore();
@@ -345,7 +400,7 @@ test("strong invitation code lets an unverified signed-in user join once and dis
   );
 });
 
-test("regular member cannot create invitations and account snapshots are immutable", async () => {
+test("regular member cannot create invitations, snapshots are immutable, and account deletion removes snapshots", async () => {
   await createHouseholdAtomically("alice");
   await addMemberAtomically("alice", "bob");
   const alice = testEnv.authenticatedContext("alice").firestore();
@@ -358,6 +413,9 @@ test("regular member cannot create invitations and account snapshots are immutab
   const snapshotRef = doc(alice, "households", householdId, "accounts", "cash", "snapshots", "2026-10");
   await assertSucceeds(setDoc(snapshotRef, { month: "2026-10", amountMinor: 90000, recordedBy: "alice", createdAt: serverTimestamp() }));
   await assertFails(setDoc(snapshotRef, { month: "2026-10", amountMinor: 80000, recordedBy: "alice", createdAt: serverTimestamp() }));
+  await assertSucceeds(deleteAccount(alice as unknown as Firestore, householdId, "cash"));
+  assert.equal((await getDoc(doc(alice, "households", householdId, "accounts", "cash"))).exists(), false);
+  assert.equal((await getDoc(snapshotRef)).exists(), false);
 });
 
 test("expired invitation cannot be accepted by bypassing the client service", async () => {

@@ -283,8 +283,10 @@ service cloud.firestore {
 
     function validBudget(data, uid, isCreate) {
       return data.keys().hasAll(['month', 'category', 'limitMinor', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['month', 'category', 'limitMinor', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['month', 'period', 'category', 'limitMinor', 'createdBy', 'createdAt', 'updatedAt'])
         && data.month is string && data.month.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && (!('period' in data) || data.period in ['monthly', 'yearly'])
+        && (!('period' in data) || data.period != 'yearly' || data.month.matches('^[0-9]{4}-01$'))
         && (validBudgetCategory(data.category)
           || (!isCreate && data.category == resource.data.category))
         && validAmount(data.limitMinor, true)
@@ -392,7 +394,7 @@ service cloud.firestore {
         allow read: if isActiveMember(householdId);
         allow create: if isActiveMember(householdId) && validAccount(request.resource.data, householdId, request.auth.uid, true);
         allow update: if isActiveMember(householdId) && validAccount(request.resource.data, householdId, request.auth.uid, false);
-        allow delete: if false;
+        allow delete: if isActiveMember(householdId);
 
         match /snapshots/{snapshotId} {
           allow read: if isActiveMember(householdId);
@@ -405,7 +407,8 @@ service cloud.firestore {
             && validAmount(request.resource.data.amountMinor, true)
             && request.resource.data.recordedBy == request.auth.uid
             && request.resource.data.createdAt == request.time;
-          allow update, delete: if false;
+          allow update: if false;
+          allow delete: if isActiveMember(householdId);
         }
       }
 

@@ -8,6 +8,7 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
   type Firestore,
 } from "firebase/firestore";
 import type {
@@ -124,6 +125,13 @@ export function currentMonthKey(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+export function previousMonthKey(month: string): string {
+  if (!isMonthKey(month)) throw new Error("Choose a valid budget month.");
+  const [year, monthNumber] = month.split("-").map(Number);
+  const previous = new Date(year, monthNumber - 2, 1);
+  return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export function goalProgressPercent(currentMinor: number, targetMinor: number): number {
   if (!Number.isFinite(currentMinor) || !Number.isFinite(targetMinor) || targetMinor <= 0) return 0;
   return Math.min(100, Math.max(0, currentMinor / targetMinor * 100));
@@ -201,11 +209,14 @@ export async function saveAccount(
   return reference.id;
 }
 
-export async function archiveAccount(database: Firestore, householdId: string, accountId: string) {
-  await updateDoc(doc(database, ...path(householdId, "accounts"), accountId), {
-    archived: true,
-    updatedAt: serverTimestamp(),
-  });
+export async function deleteAccount(database: Firestore, householdId: string, accountId: string) {
+  const snapshots = await getDocs(collection(database, ...path(householdId, "accounts"), accountId, "snapshots"));
+  for (let index = 0; index < snapshots.docs.length; index += 450) {
+    const batch = writeBatch(database);
+    snapshots.docs.slice(index, index + 450).forEach((snapshot) => batch.delete(snapshot.ref));
+    await batch.commit();
+  }
+  await deleteDoc(doc(database, ...path(householdId, "accounts"), accountId));
 }
 
 export async function addAccountSnapshot(
@@ -284,7 +295,7 @@ export async function saveCategory(
   return reference.id;
 }
 
-type BudgetInput = Pick<MonthlyBudget, "month" | "category" | "limitMinor">;
+type BudgetInput = Pick<MonthlyBudget, "month" | "period" | "category" | "limitMinor">;
 export async function saveBudget(
   database: Firestore,
   householdId: string,
@@ -294,6 +305,10 @@ export async function saveBudget(
 ) {
   positiveMinorAmount(input.limitMinor, "Budget");
   if (!isMonthKey(input.month)) throw new Error("Choose a valid budget month.");
+  const period = input.period ?? "monthly";
+  if (period !== "monthly" && period !== "yearly") {
+    throw new Error("Choose a monthly or yearly budget period.");
+  }
   if (!(BUDGET_CATEGORIES as readonly string[]).includes(input.category)
     && input.category !== existing?.category) {
     throw new Error("Choose a category used for household expenses.");
@@ -303,11 +318,59 @@ export async function saveBudget(
     : doc(collection(database, ...path(householdId, "budgets")));
   await setDoc(reference, {
     ...input,
+    period,
     createdBy: existing?.createdBy ?? actorUid,
     createdAt: existing?.createdAt ?? serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
   return reference.id;
+}
+
+export async function copyPreviousMonthBudgets(
+  database: Firestore,
+  householdId: string,
+  actorUid: string,
+  sourceMonth: string,
+  targetMonth: string,
+  budgets: MonthlyBudget[],
+) {
+  if (!isMonthKey(sourceMonth) || !isMonthKey(targetMonth)) {
+    throw new Error("Choose valid months to copy budgets.");
+  }
+  const sourceBudgets = budgets.filter(
+    (budget) => (budget.period ?? "monthly") === "monthly" && budget.month === sourceMonth,
+  );
+  if (!sourceBudgets.length) {
+    throw new Error(`There are no budgets to copy from ${sourceMonth}.`);
+  }
+
+  const targetByCategory = new Map(
+    budgets
+      .filter((budget) => (budget.period ?? "monthly") === "monthly" && budget.month === targetMonth)
+      .map((budget) => [budget.category, budget]),
+  );
+  const batch = writeBatch(database);
+  let added = 0;
+  let updated = 0;
+  for (const budget of sourceBudgets) {
+    const target = targetByCategory.get(budget.category);
+    const reference = target
+      ? doc(database, ...path(householdId, "budgets"), target.id)
+      : doc(collection(database, ...path(householdId, "budgets")));
+    if (target) updated += 1;
+    else added += 1;
+    batch.set(reference, {
+      month: targetMonth,
+      period: "monthly",
+      category: budget.category,
+      limitMinor: budget.limitMinor,
+      createdBy: target?.createdBy ?? actorUid,
+      createdAt: target?.createdAt ?? serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
+  return { added, updated };
 }
 
 type GoalInput = Pick<SavingsGoal, "name" | "targetMinor" | "currentMinor" | "deadline" | "ownerUid">;
@@ -389,7 +452,9 @@ export function budgetProgress(
   transactions: FinancialTransaction[],
 ) {
   const spentMinor = transactions
-    .filter((item) => item.date.startsWith(`${budget.month}-`)
+    .filter((item) => ((budget.period ?? "monthly") === "yearly"
+      ? item.date.startsWith(`${budget.month.slice(0, 4)}-`)
+      : item.date.startsWith(`${budget.month}-`))
       && item.type === "debit"
       && item.purpose === "ordinary"
       && item.category === budget.category)

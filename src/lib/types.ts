@@ -72,6 +72,7 @@ export type FinancialTransaction = {
 export type MonthlyBudget = {
   id: string;
   month: string;
+  period?: "monthly" | "yearly";
   category: string;
   limitMinor: number;
   createdBy: string;

@@ -2,9 +2,11 @@
 import {
   browserSessionPersistence,
   createUserWithEmailAndPassword,
+  getRedirectResult,
   setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
 } from "firebase/auth";
@@ -16,7 +18,28 @@ export async function signInWithGoogle() {
     prompt: "select_account",
   });
 
-  return signInWithPopup(auth, googleProvider);
+  try {
+    return await signInWithPopup(auth, googleProvider);
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? error.code
+        : undefined;
+
+    if (
+      code === "auth/popup-blocked" ||
+      code === "auth/operation-not-supported-in-this-environment"
+    ) {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export function getGoogleRedirectResult() {
+  return getRedirectResult(auth);
 }
 
 export async function signInWithEmail(

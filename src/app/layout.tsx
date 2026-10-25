@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Household HQ",
-  description: "A shared workspace for household finances.",
+  title: "HouseholdHQ",
+  description: "Manage your household finances together.",
+  icons: {
+    icon: "/householdhq-icon.svg",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

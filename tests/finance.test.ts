@@ -8,6 +8,7 @@ import {
   isCalendarDate,
   isMonthKey,
   parseMoneyToMinorUnits,
+  previousMonthKey,
   TRANSACTION_CATEGORIES,
 } from "../src/lib/finance";
 import { DEFAULT_CATEGORIES, type FinancialTransaction } from "../src/lib/types";
@@ -72,6 +73,34 @@ test("budget progress filters month, ordinary debits, and category and reports o
     transaction({ purpose: "investment", amountMinor: 200 }),
   ]);
   assert.deepEqual(result, { spentMinor: 1700, remainingMinor: -200, percent: 113, overspent: true });
+});
+
+test("yearly budget progress includes matching ordinary expenses across the year", () => {
+  const result = budgetProgress({
+    id: "yearly",
+    month: "2026-01",
+    period: "yearly",
+    category: "Groceries",
+    limitMinor: 120000,
+  } as never, [
+    transaction({ amountMinor: 10000, date: "2026-01-10" }),
+    transaction({ amountMinor: 25000, date: "2026-10-10" }),
+    transaction({ amountMinor: 99999, date: "2025-12-31" }),
+    transaction({ amountMinor: 50000, date: "2026-03-01", category: "Bills" }),
+    transaction({ amountMinor: 50000, date: "2026-03-01", purpose: "investment" }),
+  ]);
+  assert.deepEqual(result, {
+    spentMinor: 35000,
+    remainingMinor: 85000,
+    percent: 29,
+    overspent: false,
+  });
+});
+
+test("previous month handles year boundaries", () => {
+  assert.equal(previousMonthKey("2026-01"), "2025-12");
+  assert.equal(previousMonthKey("2026-10"), "2026-09");
+  assert.throws(() => previousMonthKey("2026-13"));
 });
 
 test("month and calendar dates are strictly validated", () => {
