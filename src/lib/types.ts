@@ -163,6 +163,7 @@ export const DEFAULT_CATEGORIES: ReadonlyArray<{
   { id: "cat-groceries", name: "Groceries", kind: "expense" },
   { id: "cat-bills", name: "Bills", kind: "expense" },
   { id: "cat-shopping", name: "Shopping", kind: "expense" },
+  { id: "cat-entertainment", name: "Entertainment", kind: "expense" },
   { id: "cat-loan-payment", name: "Loan payment", kind: "expense" },
   { id: "cat-other-expense", name: "Other expense", kind: "expense" },
   { id: "cat-investment", name: "Investment contribution", kind: "investment" },

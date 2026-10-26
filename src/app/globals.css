@@ -111,7 +111,7 @@ textarea:focus-visible {
 .app-dark .border-slate-100,
 .app-dark .border-slate-200,
 .app-dark .border-slate-300 { border-color: #3c4a5e !important; }
-.app-dark .divide-slate-100 > :not(:first-child) { border-color: #3c4a5e !important; }
+.app-dark .divide-slate-100 > :not(:last-child) { border-color: #3c4a5e !important; }
 .app-dark input,
 .app-dark select,
 .app-dark textarea { background-color: #273449; color: #e5e7eb; }
@@ -245,6 +245,11 @@ textarea:focus-visible {
 
 .edit-focus-highlight {
   animation: edit-focus-pulse 1.2s ease-in-out 2;
+}
+
+.edit-focus-target {
+  scroll-margin-top: 6.5rem;
+  scroll-margin-bottom: 7rem;
 }
 
 .notification-toast {

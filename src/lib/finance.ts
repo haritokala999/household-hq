@@ -31,6 +31,7 @@ export const TRANSACTION_CATEGORIES = [
   "Groceries",
   "Housing & utilities",
   "Shopping",
+  "Entertainment",
   "Eatout",
   "Transportation",
   "Travel",
@@ -203,8 +204,8 @@ export function calculateFinanceSummary(
     .filter((item) => item.type === "credit" && item.purpose === "income")
     .reduce((sum, item) => sum + item.amountMinor, 0);
   const ordinaryExpensesMinor = currentTransactions
-    .filter((item) => item.type === "debit" && item.purpose === "ordinary")
-    .reduce((sum, item) => sum + item.amountMinor, 0);
+    .filter((item) => item.purpose === "ordinary" && (item.type === "debit" || item.type === "credit"))
+    .reduce((sum, item) => sum + (item.type === "credit" ? -item.amountMinor : item.amountMinor), 0);
   const investmentContributionsMinor = currentTransactions
     .filter((item) => (item.type === "debit" || item.type === "transfer") && item.purpose === "investment")
     .reduce((sum, item) => sum + item.amountMinor, 0);
@@ -300,7 +301,7 @@ export async function saveTransaction(
     throw new Error("Choose one of the supported transaction categories.");
   }
   positiveMinorAmount(input.amountMinor, "Transaction amount");
-  const validClassification = (input.type === "credit" && input.purpose === "income")
+  const validClassification = (input.type === "credit" && (input.purpose === "income" || input.purpose === "ordinary"))
     || (input.type === "debit" && (input.purpose === "ordinary" || input.purpose === "investment"))
     || (input.type === "transfer" && input.purpose === "investment" && (input.transferDestination === "brokerage" || input.transferDestination === "retirement" || input.transferDestination === "cash"));
   if (!validClassification) throw new Error("Choose a valid income, expense, or transfer type.");
@@ -584,10 +585,10 @@ export function budgetProgress(
     .filter((item) => ((budget.period ?? "monthly") === "yearly"
       ? item.date.startsWith(`${budget.month.slice(0, 4)}-`)
       : item.date.startsWith(`${budget.month}-`))
-      && item.type === "debit"
       && item.purpose === "ordinary"
+      && (item.type === "debit" || item.type === "credit")
       && item.category === budget.category)
-    .reduce((sum, item) => sum + item.amountMinor, 0);
+    .reduce((sum, item) => sum + (item.type === "credit" ? -item.amountMinor : item.amountMinor), 0);
   return {
     spentMinor,
     remainingMinor: budget.limitMinor - spentMinor,

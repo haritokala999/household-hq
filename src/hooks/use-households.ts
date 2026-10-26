@@ -9,6 +9,7 @@ import type { HouseholdMembership } from "@/lib/types";
 export function useHouseholds() {
   const [uid, setUid] = useState<string | null>(null);
   const [activeHouseholdId, setActiveHouseholdId] = useState("");
+  const [defaultHouseholdId, setDefaultHouseholdId] = useState("");
   const [households, setHouseholds] = useState<HouseholdMembership[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -37,14 +38,17 @@ export function useHouseholds() {
       const version = ++requestVersion.current;
       setUid(user?.uid ?? null);
       let savedHouseholdId = "";
+      let savedDefaultHouseholdId = "";
       if (user) {
         try {
           savedHouseholdId = window.localStorage.getItem(`household-hq.active-household:${user.uid}`) ?? "";
+          savedDefaultHouseholdId = window.localStorage.getItem(`household-hq.default-household:${user.uid}`) ?? "";
         } catch {
           // The household list still loads if browser storage is unavailable.
         }
       }
       setActiveHouseholdId(savedHouseholdId);
+      setDefaultHouseholdId(savedDefaultHouseholdId);
       setHouseholds([]);
       setError("");
 
@@ -56,7 +60,21 @@ export function useHouseholds() {
       setLoading(true);
       void getHouseholdsForUser(db, user.uid)
         .then((results) => {
-          if (version === requestVersion.current) setHouseholds(results);
+          if (version !== requestVersion.current) return;
+          setHouseholds(results);
+          const preferredId = savedDefaultHouseholdId || savedHouseholdId;
+          const selectedId = results.some((household) => household.householdId === preferredId)
+            ? preferredId
+            : results.length === 1 ? results[0].householdId : "";
+          setDefaultHouseholdId(results.some((household) => household.householdId === savedDefaultHouseholdId) ? savedDefaultHouseholdId : "");
+          setActiveHouseholdId(selectedId);
+          if (selectedId) {
+            try {
+              window.localStorage.setItem(`household-hq.active-household:${user.uid}`, selectedId);
+            } catch {
+              // The selection remains active for this page session.
+            }
+          }
         })
         .catch((cause: unknown) => {
           if (version === requestVersion.current) {
@@ -104,5 +122,16 @@ export function useHouseholds() {
     setActiveHouseholdId(householdId);
   }, [uid]);
 
-  return { uid, households, activeHouseholdId, loading, error, retry, refreshHouseholds, selectHousehold };
+  const setDefaultHousehold = useCallback((householdId: string) => {
+    if (!uid || !households.some((household) => household.householdId === householdId)) return;
+    try {
+      window.localStorage.setItem(`household-hq.default-household:${uid}`, householdId);
+    } catch {
+      // Keep the default for this page session even if browser storage is unavailable.
+    }
+    setDefaultHouseholdId(householdId);
+    selectHousehold(householdId);
+  }, [households, selectHousehold, uid]);
+
+  return { uid, households, activeHouseholdId, defaultHouseholdId, loading, error, retry, refreshHouseholds, selectHousehold, setDefaultHousehold };
 }

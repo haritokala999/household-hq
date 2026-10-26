@@ -20,6 +20,10 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 The app uses local system font stacks so production builds do not depend on fetching fonts from an external service.
 
+## Statement imports
+
+The transaction importer parses CSV files and text-based Capital One PDF statements in memory. Imported transactions are associated with the signed-in household member and are not linked to a financial account. It requires the existing `NEXT_PUBLIC_FIREBASE_PROJECT_ID` setting and server-side Firebase Admin credentials: either Application Default Credentials in the Node.js runtime or a protected `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable. Never expose the service-account value to the browser or commit it. The application server must run in a Node.js environment; `firebase.json` configures Firestore rules and the local emulator, not Next.js API hosting.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

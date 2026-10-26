@@ -59,6 +59,7 @@ test("financial summary separates income, ordinary expenses, investment, and net
     transactions: [
       transaction({ type: "credit", purpose: "income", amountMinor: 50000 }),
       transaction({ type: "debit", purpose: "ordinary", amountMinor: 12000 }),
+      transaction({ type: "credit", purpose: "ordinary", amountMinor: 2500 }),
       transaction({ type: "debit", purpose: "investment", amountMinor: 8000 }),
       transaction({ type: "transfer", purpose: "investment", transferDestination: "brokerage", amountMinor: 6000 }),
       transaction({ type: "credit", purpose: "income", date: "2026-09-30", amountMinor: 90000 }),
@@ -69,9 +70,9 @@ test("financial summary separates income, ordinary expenses, investment, and net
     liabilitiesMinor: 40000,
     netWorthMinor: 90000,
     incomeMinor: 50000,
-    ordinaryExpensesMinor: 12000,
+    ordinaryExpensesMinor: 9500,
     investmentContributionsMinor: 14000,
-    availableToSpendMinor: 24000,
+    availableToSpendMinor: 26500,
   });
 });
 
@@ -108,6 +109,22 @@ test("budget progress filters month, ordinary debits, and category and reports o
     transaction({ purpose: "investment", amountMinor: 200 }),
   ]);
   assert.deepEqual(result, { spentMinor: 1700, remainingMinor: -200, percent: 113, overspent: true });
+});
+
+test("refunds reduce ordinary expenses and matching budget progress without counting as income", () => {
+  const transactions = [
+    transaction({ type: "debit", amountMinor: 5000 }),
+    transaction({ type: "credit", purpose: "ordinary", amountMinor: 1250 }),
+  ];
+  const summary = calculateFinanceSummary({
+    accounts: [] as never,
+    assets: [] as never,
+    liabilities: [] as never,
+    transactions,
+  }, "2026-10");
+  assert.equal(summary.incomeMinor, 0);
+  assert.equal(summary.ordinaryExpensesMinor, 3750);
+  assert.equal(budgetProgress({ id: "b", month: "2026-10", category: "Groceries", limitMinor: 4000 } as never, transactions).spentMinor, 3750);
 });
 
 test("yearly budget progress includes matching ordinary expenses across the year", () => {
@@ -158,11 +175,14 @@ test("new households initialize required income, expense, and investment categor
   assert.ok(TRANSACTION_CATEGORIES.includes("Paycheck"));
   assert.ok(TRANSACTION_CATEGORIES.includes("Paycheck transfer"));
   assert.ok(TRANSACTION_CATEGORIES.includes("India Transfer"));
+  assert.ok(TRANSACTION_CATEGORIES.includes("Entertainment"));
   assert.ok(BUDGET_CATEGORIES.includes("India Transfer"));
+  assert.ok(BUDGET_CATEGORIES.includes("Entertainment"));
   assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Paycheck"));
   assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Paycheck transfer"));
   assert.ok(!(BUDGET_CATEGORIES as readonly string[]).includes("Savings and expenses"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Paycheck" && category.kind === "income"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Groceries" && category.kind === "expense"));
+  assert.ok(DEFAULT_CATEGORIES.some((category) => category.name === "Entertainment" && category.kind === "expense"));
   assert.ok(DEFAULT_CATEGORIES.some((category) => category.kind === "investment"));
 });

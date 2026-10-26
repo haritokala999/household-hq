@@ -324,6 +324,14 @@ test("authorized members can use financial records while unrelated users and unk
       date: "2026-10-01", accountId: null, ownerUid: uid, createdBy: uid,
       createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
+    await assertSucceeds(saveTransaction(database as unknown as Firestore, householdId, uid, {
+      type: "credit", purpose: "ordinary", transferDestination: null, category: "Groceries", description: "Card refund", amountMinor: 1250,
+      date: "2026-10-01", accountId: null, sourceAccountId: null, ownerUid: uid,
+    }));
+    await assertSucceeds(saveTransaction(database as unknown as Firestore, householdId, uid, {
+      type: "debit", purpose: "ordinary", transferDestination: null, category: "Entertainment", description: "Movie tickets", amountMinor: 2500,
+      date: "2026-10-01", accountId: null, sourceAccountId: null, ownerUid: uid,
+    }));
     for (const [accountId, kind] of [[`${uid}-cash`, "savings"], [`${uid}-brokerage`, "brokerage"], [`${uid}-retirement`, "retirement"]] as const) {
       await assertSucceeds(setDoc(doc(database, "households", householdId, "accounts", accountId), {
         name: accountId, kind, ownerUid: uid, balanceMinor: 500000, currency: "USD", archived: false,

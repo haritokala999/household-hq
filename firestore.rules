@@ -104,6 +104,7 @@ service cloud.firestore {
           || (categoryId == 'cat-groceries' && data.name == 'Groceries' && data.kind == 'expense')
           || (categoryId == 'cat-bills' && data.name == 'Bills' && data.kind == 'expense')
           || (categoryId == 'cat-shopping' && data.name == 'Shopping' && data.kind == 'expense')
+          || (categoryId == 'cat-entertainment' && data.name == 'Entertainment' && data.kind == 'expense')
           || (categoryId == 'cat-loan-payment' && data.name == 'Loan payment' && data.kind == 'expense')
           || (categoryId == 'cat-other-expense' && data.name == 'Other expense' && data.kind == 'expense')
           || (categoryId == 'cat-investment' && data.name == 'Investment contribution' && data.kind == 'investment'));
@@ -244,6 +245,7 @@ service cloud.firestore {
         'Groceries',
         'Housing & utilities',
         'Shopping',
+        'Entertainment',
         'Eatout',
         'Transportation',
         'Travel',
@@ -266,7 +268,7 @@ service cloud.firestore {
         && data.keys().hasOnly(['type', 'purpose', 'transferDestination', 'category', 'description', 'amountMinor', 'date', 'accountId', 'sourceAccountId', 'ledgerApplied', 'ownerUid', 'createdBy', 'createdAt', 'updatedAt'])
         && data.type in ['credit', 'debit', 'transfer']
         && data.purpose in ['income', 'ordinary', 'investment']
-        && ((data.type == 'credit' && data.purpose == 'income' && data.transferDestination == null)
+        && ((data.type == 'credit' && data.purpose in ['income', 'ordinary'] && data.transferDestination == null)
           || (data.type == 'debit' && data.purpose in ['ordinary', 'investment'] && data.transferDestination == null)
           || (data.type == 'transfer' && data.purpose == 'investment'
             && data.transferDestination in ['brokerage', 'retirement', 'cash']

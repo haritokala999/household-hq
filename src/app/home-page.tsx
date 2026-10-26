@@ -33,6 +33,7 @@ import {
   formatMoney,
   goalProgressPercent,
   getAccountSnapshots,
+  isCalendarDate,
   isMonthKey,
   loadHouseholdFinance,
   moneyInputValue,
@@ -62,6 +63,7 @@ import type {
   SavingsGoal,
   RecurringPayment,
 } from "@/lib/types";
+import type { CsvColumnMapping, ImportRow, ImportTransactionType } from "@/lib/statement-import";
 import { HOUSEHOLD_CURRENCIES, HOUSEHOLD_CURRENCY_NAMES } from "@/lib/types";
 
 type Section = "Dashboard" | "Transactions" | "Budgets" | "Goals" | "Investments" | "Household";
@@ -92,7 +94,7 @@ const emptyFinance: HouseholdFinanceData = {
 
 function focusEditTarget(element: HTMLElement | null) {
   if (!element) return;
-  element.scrollIntoView({ behavior: "smooth", block: "center" });
+  element.scrollIntoView({ behavior: "smooth", block: "start" });
   element.classList.remove("edit-focus-highlight");
   void element.offsetWidth;
   element.classList.add("edit-focus-highlight");
@@ -114,7 +116,7 @@ function useEditFocus<T extends HTMLElement>(targetKey: boolean | string | undef
 
 export default function Home() {
   const router = useRouter();
-  const { uid, households, activeHouseholdId, loading: householdsLoading, error: householdError, retry, refreshHouseholds, selectHousehold } = useHouseholds();
+  const { uid, households, activeHouseholdId, defaultHouseholdId, loading: householdsLoading, error: householdError, retry, refreshHouseholds, selectHousehold, setDefaultHousehold } = useHouseholds();
   const [section, setSection] = useState<Section>("Dashboard");
   const [finance, setFinance] = useState<HouseholdFinanceData>(emptyFinance);
   const [members, setMembers] = useState<HouseholdMember[]>([]);
@@ -127,6 +129,8 @@ export default function Home() {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const profileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const notificationSequence = useRef(0);
   const celebrationSequence = useRef(0);
   const activityHouseholdRef = useRef<string | undefined>(undefined);
@@ -143,6 +147,24 @@ export default function Home() {
   const [transferringOwnership, setTransferringOwnership] = useState(false);
   const [promotingMember, setPromotingMember] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+
+  useEffect(() => {
+    if (!showProfileMenu) return;
+    function dismissOnOutsideClick(event: PointerEvent) {
+      if (!(event.target instanceof Node) || !profileMenuRef.current?.contains(event.target)) setShowProfileMenu(false);
+    }
+    function dismissOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setShowProfileMenu(false);
+      profileMenuTriggerRef.current?.focus();
+    }
+    document.addEventListener("pointerdown", dismissOnOutsideClick);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnOutsideClick);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, [showProfileMenu]);
 
   const selectedHousehold = households.find((item) => item.householdId === activeHouseholdId)
     ?? (households.length === 1 ? households[0] : undefined);
@@ -230,11 +252,9 @@ export default function Home() {
   }, []);
 
   function toggleTheme() {
-    setDarkMode((current) => {
-      const next = !current;
-      window.localStorage.setItem("household-hq-theme", next ? "dark" : "light");
-      return next;
-    });
+    const next = !darkMode;
+    window.localStorage.setItem("household-hq-theme", next ? "dark" : "light");
+    setDarkMode(next);
   }
 
   useEffect(() => {
@@ -441,6 +461,9 @@ export default function Home() {
 
   function renderWorkspaceItem(item: Section, visibilityClass: string) {
     const active = section === item;
+    const iconTone = active
+      ? "bg-teal-100 text-teal-800"
+      : "bg-slate-100/80 text-slate-500 group-hover:bg-teal-50 group-hover:text-teal-700";
     return (
       <button
         key={`${visibilityClass}-${item}`}
@@ -449,7 +472,7 @@ export default function Home() {
         onClick={() => setSection(item)}
         className={`glass-nav-item group inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium leading-none transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 sm:text-[11px] md:flex-none md:flex-row md:gap-2 md:rounded-full md:px-5 md:py-2.5 md:text-sm md:leading-normal ${visibilityClass} ${item === "Dashboard" && visibilityClass === "mobile-workspace-nav-item" ? "mobile-dashboard-nav" : ""} ${active ? "glass-nav-active" : "glass-nav-idle"}`}
       >
-        <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors duration-200 md:h-9 md:w-9 ${active ? "bg-teal-100 text-teal-800" : "bg-slate-100/80 text-slate-500 group-hover:bg-teal-50 group-hover:text-teal-700"}`}>
+        <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors duration-200 md:h-9 md:w-9 ${iconTone}`}>
           <WorkspaceIcon section={item} />
         </span>
         <span>{item}</span>
@@ -542,9 +565,10 @@ export default function Home() {
                   </> : householdActivity.length === 0 && <p className="mt-3 text-sm text-slate-500">You’re all caught up.</p>}
                 </div>}
               </div>
-              <div className="relative">
+              <div ref={profileMenuRef} className="relative">
                 <button
                   type="button"
+                  ref={profileMenuTriggerRef}
                   aria-label="Profile menu"
                   aria-expanded={showProfileMenu}
                   aria-haspopup="true"
@@ -556,7 +580,7 @@ export default function Home() {
                   <span className="hidden max-w-32 truncate text-sm font-semibold sm:inline">{profileName}</span>
                   <svg aria-hidden="true" viewBox="0 0 20 20" className="hidden h-4 w-4 text-slate-400 sm:block" fill="currentColor"><path fillRule="evenodd" d="M5.22 7.47a.75.75 0 0 1 1.06 0L10 11.19l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
                 </button>
-                {showProfileMenu && <div role="menu" aria-label="Profile and settings" className="absolute right-0 z-40 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 text-slate-900 shadow-xl">
+                {showProfileMenu && <div role="menu" aria-label="Profile and settings" className="absolute right-0 z-40 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 text-slate-900 shadow-xl md:-right-8">
                   <div className="flex items-center justify-between gap-2 px-3 py-2.5">
                     <div className="min-w-0">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Signed in as</p>
@@ -586,7 +610,7 @@ export default function Home() {
             {(["Transactions", "Budgets", "Dashboard", "Goals", "Investments"] as const).map((item) => renderWorkspaceItem(item, "mobile-workspace-nav-item"))}
             {workspaceSections.map((item) => renderWorkspaceItem(item, "desktop-workspace-nav-item"))}
           </nav>
-          <div className="mx-auto max-w-7xl space-y-6 px-4 pb-24 pt-5 sm:px-8 sm:pt-8 md:pb-8">
+          <div className="mx-auto max-w-7xl space-y-6 px-4 pb-28 pt-5 sm:px-8 sm:pt-8 md:pb-8">
             {financeError && <ErrorPanel message={financeError} onRetry={refresh} />}
             {loadingFinance ? <LoadingPanel label="Loading household records…" /> : (
               <>
@@ -597,7 +621,7 @@ export default function Home() {
                   undefined,
                   true,
                 )} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.")} />}
-                {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.")} editing={editingTransaction} setEditing={setEditingTransaction} />}
+                {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} householdId={householdId!} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.")} onImportComplete={refresh} editing={editingTransaction} setEditing={setEditingTransaction} />}
                 {section === "Budgets" && <BudgetsSection finance={finance} currency={currency} month={month} setMonth={setMonth} onSave={(input, existing) => runAction(() => saveBudget(db, householdId!, uid!, input, existing), "Budget saved.", undefined, existing ? undefined : "budget")} onCopyPrevious={(sourceMonth, targetMonth) => runAction(() => copyPreviousMonthBudgets(db, householdId!, uid!, sourceMonth, targetMonth, finance.budgets), "Previous month’s budgets copied into the selected month.")} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "budgets", id), "Budget deleted.")} editing={editingBudget} setEditing={setEditingBudget} />}
                 {section === "Goals" && <GoalsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} onSave={(input, existing) => runAction(() => saveGoal(db, householdId!, uid!, input, existing), "Goal saved.", undefined, !existing && input.currentMinor >= input.targetMinor ? "goal" : undefined)} onAddProgress={(goalId, amountMinor, onSuccess) => {
                   const goal = finance.goals.find((item) => item.id === goalId);
@@ -605,7 +629,7 @@ export default function Home() {
                   return runAction(() => addGoalProgress(db, householdId!, goalId, amountMinor), completesGoal ? "Goal achieved — congratulations!" : "Goal progress updated.", onSuccess, completesGoal ? "goal" : undefined);
                 }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.")} editing={editingGoal} setEditing={setEditingGoal} />}
                 {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} darkMode={darkMode} snapshots={snapshotHistory} onSaveAccount={(input) => runAction(async () => { const accountId = await saveAccount(db, householdId!, uid!, currency, input); const thisMonth = currentMonthKey(); if (!(snapshotHistory[accountId] ?? []).some((snapshot) => snapshot.month === thisMonth)) await addAccountSnapshot(db, householdId!, accountId, uid!, thisMonth, input.balanceMinor); }, "Account added.")} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.")} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.")} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`)} />}
-                {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} onSelectHousehold={selectHousehold} onRenameHousehold={handleRenameHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
+                {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} defaultHouseholdId={defaultHouseholdId} onSelectHousehold={selectHousehold} onSetDefaultHousehold={setDefaultHousehold} onRenameHousehold={handleRenameHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
               </>
             )}
 
@@ -721,8 +745,8 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
   const previousMonth = new Date(year, monthNumber - 2, 1);
   const previousPrefix = `${previousMonth.getFullYear()}-${String(previousMonth.getMonth() + 1).padStart(2, "0")}-`;
   const totalsFor = (prefix: string) => finance.transactions.filter((item) => item.date.startsWith(prefix)).reduce((totals, item) => {
-    if (item.type === "credit") totals.income += item.amountMinor;
-    else if (item.type === "debit" && item.purpose === "ordinary") totals.expenses += item.amountMinor;
+    if (item.type === "credit" && item.purpose === "income") totals.income += item.amountMinor;
+    else if (item.purpose === "ordinary" && (item.type === "debit" || item.type === "credit")) totals.expenses += item.type === "credit" ? -item.amountMinor : item.amountMinor;
     else if ((item.type === "debit" || item.type === "transfer") && item.purpose === "investment") totals.investments += item.amountMinor;
     return totals;
   }, { income: 0, expenses: 0, investments: 0 });
@@ -745,7 +769,7 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
   });
   const chartMax = Math.max(1, ...monthly.flatMap((item) => [item.expenses, item.savings, 0]));
   const memberIncome = new Map<string, number>();
-  for (const item of monthTransactions) if (item.type === "credit") memberIncome.set(item.ownerUid, (memberIncome.get(item.ownerUid) ?? 0) + item.amountMinor);
+  for (const item of monthTransactions) if (item.type === "credit" && item.purpose === "income") memberIncome.set(item.ownerUid, (memberIncome.get(item.ownerUid) ?? 0) + item.amountMinor);
   const changeText = (amount: number, prior: number) => `${percentChange(amount, prior)} vs last month`;
   const daysInMonth = new Date(year, monthNumber, 0).getDate();
   const firstWeekday = new Date(year, monthNumber - 1, 1).getDay();
@@ -798,7 +822,7 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
       <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Goals</h2><button onClick={() => onOpen("Goals")} className="text-sm font-semibold text-emerald-700">Manage →</button></div><div className="mt-4 space-y-4">{finance.goals.slice(0, 4).map((goal) => { const progress = goalProgressPercent(goal.currentMinor, goal.targetMinor); const visibleWidth = progress > 0 ? Math.max(1, progress) : 0; const progressLabel = progress > 0 && progress < 1 ? "<1%" : `${Math.round(progress)}%`; return <div key={goal.id}><div className="flex justify-between gap-3 text-sm"><span className="font-medium">{goal.name}</span><span className="text-slate-500">{progressLabel}</span></div><div role="progressbar" aria-label={`${goal.name} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-600 transition-[width] duration-500" style={{ width: `${visibleWidth}%` }} /></div><p className="mt-1 text-xs text-slate-500">{formatMoney(goal.currentMinor, currency)} of {formatMoney(goal.targetMinor, currency)}{goal.deadline ? ` · due ${goal.deadline}` : ""}</p></div>; })}{!finance.goals.length && <p className="text-sm text-slate-500">No goals yet.</p>}</div></section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Category budgets</h2><button onClick={() => onOpen("Budgets")} className="text-sm font-semibold text-emerald-700">Manage →</button></div><p className="mt-1 text-xs text-slate-500">This month’s ordinary debit transactions compared with each category limit.</p><div className="mt-4 space-y-4">{finance.budgets.filter((budget) => budget.month === month).map((budget) => { const progress = budgetProgress(budget, finance.transactions); return <div key={budget.id}><div className="flex justify-between gap-3 text-sm"><span className="font-medium">{budget.category}</span><span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}>{formatMoney(progress.spentMinor, currency)} / {formatMoney(budget.limitMinor, currency)}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${progress.overspent ? "bg-red-500" : "bg-amber-500"}`} style={{ width: `${Math.min(progress.percent, 100)}%` }} /></div><p className={`mt-1 text-xs ${progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}`}>{progress.overspent ? `${formatMoney(Math.abs(progress.remainingMinor), currency)} over budget` : `${formatMoney(progress.remainingMinor, currency)} remaining`}</p></div>; })}{!finance.budgets.some((budget) => budget.month === month) && <p className="text-sm text-slate-500">No category budgets for this month.</p>}</div></section>
     </div>
-    <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Recent activity</h2><button onClick={() => onOpen("Transactions")} className="text-sm font-semibold text-emerald-700">View all →</button></div><div className="mt-3 divide-y divide-slate-100">{monthTransactions.slice(0, 6).map((item) => <div key={item.id} className="flex justify-between gap-3 py-3 text-sm"><div><p className="font-medium">{item.description || item.category}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.category} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><p className={item.type === "credit" ? "font-semibold text-emerald-700" : item.type === "debit" ? "font-semibold text-red-700" : "font-semibold text-teal-700"}>{item.type === "credit" ? "+" : item.type === "debit" ? "−" : "↔"}{formatMoney(item.amountMinor, currency)}</p></div>)}{!monthTransactions.length && <p className="py-3 text-sm text-slate-500">No transactions for this month.</p>}</div></section>
+    <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Recent activity</h2><button onClick={() => onOpen("Transactions")} className="text-sm font-semibold text-emerald-700">View all →</button></div><div className="mt-3 divide-y divide-slate-100">{monthTransactions.slice(0, 6).map((item) => <div key={item.id} className="flex justify-between gap-3 py-3 text-sm"><div><p className="font-medium">{item.description || item.category}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.category} · {item.type === "credit" ? item.purpose === "ordinary" ? "Refund" : "Income" : item.type === "debit" ? "Expense" : "Transfer"} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><p className={item.type === "credit" && item.purpose === "ordinary" ? "font-semibold text-amber-700" : item.type === "credit" ? "font-semibold text-emerald-700" : item.type === "debit" ? "font-semibold text-red-700" : "font-semibold text-teal-700"}>{item.type === "credit" ? item.purpose === "ordinary" ? "−" : "+" : item.type === "debit" ? "−" : "↔"}{formatMoney(item.amountMinor, currency)}</p></div>)}{!monthTransactions.length && <p className="py-3 text-sm text-slate-500">No transactions for this month.</p>}</div></section>
     <p className="text-xs text-slate-500">Savings are calculated as income minus expenses and investment contributions. Percentages compare with the prior month.</p>
   </>;
 }
@@ -809,9 +833,10 @@ function financeMemberOptions(names: Map<string, string>, currentUid: string) {
   return entries.map(([id, name]) => <option key={id} value={id}>{name}</option>);
 }
 
-function TransactionsSection({ finance, currency, uid, memberNames, filter, setFilter, typeFilter, setTypeFilter, onSave, onDelete, editing, setEditing }: {
+function TransactionsSection({ finance, currency, householdId, uid, memberNames, filter, setFilter, typeFilter, setTypeFilter, onSave, onDelete, onImportComplete, editing, setEditing }: {
   finance: HouseholdFinanceData;
-  currency: string;
+  currency: HouseholdCurrency;
+  householdId: string;
   uid: string;
   memberNames: Map<string, string>;
   filter: string;
@@ -820,9 +845,12 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
   setTypeFilter: (value: string) => void;
   onSave: (input: Pick<FinancialTransaction, "type" | "purpose" | "transferDestination" | "category" | "description" | "amountMinor" | "date" | "accountId" | "sourceAccountId" | "ownerUid">, existing?: FinancialTransaction) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onImportComplete: () => Promise<void>;
   editing?: FinancialTransaction;
   setEditing: (transaction?: FinancialTransaction) => void;
 }) {
+  const [showImport, setShowImport] = useState(false);
+  const [showEditor, setShowEditor] = useState(Boolean(editing));
   const [type, setType] = useState<FinancialTransaction["type"]>("debit");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
@@ -835,6 +863,10 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
   const [error, setError] = useState("");
   const editorRef = useEditFocus<HTMLElement>(editing?.id);
   const ownerUid = editing?.ownerUid ?? uid;
+
+  // Keep the manual-entry form open for edits and collapsed for new entries.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setShowEditor(Boolean(editing)); }, [editing]);
 
   // Reset controlled form fields when a different record is selected.
   useEffect(() => {
@@ -857,7 +889,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
       await onSave({
         type,
         purpose: type === "credit"
-          ? "income"
+          ? editing?.type === "credit" && editing.purpose === "ordinary" ? "ordinary" : "income"
           : type === "transfer"
             ? "investment"
             : category === SAVINGS_CATEGORY || (editing?.purpose === "investment" && category === editing.category)
@@ -878,6 +910,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
       setShowDescription(false);
       setAmount("");
       setAccountId("");
+      setShowEditor(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save transaction.");
     }
@@ -889,7 +922,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
     .filter((item) => {
       if (!normalizedFilter) return true;
       const owner = memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member");
-      const kind = item.type === "credit" ? "income" : item.type === "debit" ? "expense" : "transfer";
+      const kind = item.type === "credit" ? item.purpose === "ordinary" ? "refund" : "income" : item.type === "debit" ? "expense" : "transfer";
       const searchable = `${item.category} ${item.description} ${item.date} ${kind} ${owner} ${formatMoney(item.amountMinor, currency)}`;
       return searchable.toLowerCase().includes(normalizedFilter);
     })
@@ -902,9 +935,16 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
 
   return (
     <>
-    <FeatureHeading section="Transactions" title="Transactions" description="Track household income, spending, and transfers." />
-    <div className="grid gap-6 xl:grid-cols-[1fr_1.3fr]">
-      <section ref={editorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
+    <div className="flex flex-wrap items-end justify-between gap-3">
+      <FeatureHeading section="Transactions" title="Transactions" description="Track household income, spending, and transfers." />
+      <div className="flex flex-wrap items-center gap-2">
+        {!editing && <button type="button" aria-expanded={showEditor} aria-controls={showEditor ? "transaction-editor" : undefined} onClick={() => { setShowEditor((visible) => !visible); setError(""); }} className={`${showEditor ? secondaryButtonClass : buttonClass} inline-flex items-center gap-2`}><span aria-hidden="true" className="text-lg leading-none">{showEditor ? "−" : "+"}</span>{showEditor ? "Close form" : "Add transaction"}</button>}
+        <button type="button" onClick={() => setShowImport((visible) => !visible)} className={buttonClass}>{showImport ? "Close import" : "Import transactions"}</button>
+      </div>
+    </div>
+    {showImport && <TransactionImportFlow householdId={householdId} currency={currency} transactions={finance.transactions} onImported={onImportComplete} onClose={() => setShowImport(false)} />}
+    <div className={`grid gap-6 ${showEditor ? "xl:grid-cols-[1fr_1.3fr]" : ""}`}>
+      {showEditor && <section id="transaction-editor" ref={editorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-center gap-2"><span className="rounded-lg bg-emerald-50 p-2 text-emerald-700"><WorkspaceIcon section="Transactions" /></span><h2 className="font-bold">{editing ? "Edit transaction" : "Add a transaction"}</h2></div>
         <p className="mt-1 text-xs text-slate-500">Paycheck allocations increase the selected investment account. Record paycheck income separately.</p>
         <form onSubmit={submit} className="mt-4 space-y-3">
@@ -917,7 +957,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
                 else { setTransferDestination(null); setShowTransferDialog(false); }
               }} className={`${inputClass} mt-1`}>
                 <option value="debit">Expense</option>
-                <option value="credit">Income</option>
+                <option value="credit">{editing?.type === "credit" && editing.purpose === "ordinary" ? "Refund" : "Income"}</option>
                 <option value="transfer">Paycheck allocation</option>
               </select>
             </label>
@@ -968,11 +1008,11 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
           </label>}
           <div className="flex gap-2">
             <button className={buttonClass}>{editing ? "Save" : "Add"}</button>
-            {editing && <button type="button" onClick={() => setEditing(undefined)} className={secondaryButtonClass}>Cancel</button>}
+            <button type="button" onClick={() => { setEditing(undefined); setShowEditor(false); setType("debit"); setCategory(""); setDescription(""); setShowDescription(false); setAmount(""); setAccountId(""); setError(""); }} className={secondaryButtonClass}>Cancel</button>
           </div>
           {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
         </form>
-      </section>
+      </section>}
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -983,7 +1023,7 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
             <input type="search" aria-label="Search transactions" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search category, date, amount, member…" className={`${inputClass} min-w-0`} />
             <select aria-label="Filter transaction type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 text-sm">
               <option value="all">All types</option>
-              <option value="credit">Income</option>
+              <option value="credit">Income & refunds</option>
               <option value="debit">Expense</option>
               <option value="transfer">Transfer</option>
             </select>
@@ -992,16 +1032,16 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
         <div className="mt-4 divide-y divide-slate-100">
           {rows.map((item) => <div key={item.id} className="group -mx-2 flex flex-wrap items-center justify-between gap-3 rounded-xl px-2 py-3 transition-colors hover:bg-slate-50">
             <div className="flex min-w-0 items-center gap-3">
-              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${item.type === "credit" ? "bg-emerald-50 text-emerald-700" : item.type === "transfer" ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-700"}`}>
+              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${item.type === "credit" && item.purpose === "income" ? "bg-emerald-50 text-emerald-700" : item.type === "transfer" ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-700"}`}>
                 <WorkspaceIcon section="Transactions" />
               </span>
               <div className="min-w-0">
                 <p className="truncate font-semibold">{item.description || item.category}</p>
-                <p className="mt-1 text-xs text-slate-500">{item.date} · {item.category} · {item.type === "credit" ? "Income" : item.type === "debit" ? "Expense" : "Transfer"} · for {memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")}</p>
+                <p className="mt-1 text-xs text-slate-500">{item.date} · {item.category} · {item.type === "credit" ? item.purpose === "ordinary" ? "Refund" : "Income" : item.type === "debit" ? "Expense" : "Transfer"} · for {memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")}</p>
               </div>
             </div>
             <div className="flex items-center gap-2 rounded-lg transition-transform duration-200 group-hover:scale-[1.02]">
-              <p className={item.type === "credit" ? "font-semibold text-emerald-700" : item.type === "debit" ? "font-semibold text-red-700" : "font-semibold text-teal-700"}>{item.type === "credit" ? "+" : item.type === "debit" ? "−" : "↔"}{formatMoney(item.amountMinor, currency)}</p>
+              <p className={item.type === "credit" && item.purpose === "ordinary" ? "font-semibold text-amber-700" : item.type === "credit" ? "font-semibold text-emerald-700" : item.type === "debit" ? "font-semibold text-red-700" : "font-semibold text-teal-700"}>{item.type === "credit" ? item.purpose === "ordinary" ? "−" : "+" : item.type === "debit" ? "−" : "↔"}{formatMoney(item.amountMinor, currency)}</p>
               <button onClick={() => setEditing(item)} className={secondaryButtonClass}>Edit</button>
               <button onClick={() => void onDelete(item.id)} className={secondaryButtonClass}>Delete</button>
             </div>
@@ -1031,15 +1071,351 @@ function TransactionsSection({ finance, currency, uid, memberNames, filter, setF
   );
 }
 
+function TransactionImportFlow({ householdId, currency, transactions, onImported, onClose }: {
+  householdId: string;
+  currency: HouseholdCurrency;
+  transactions: FinancialTransaction[];
+  onImported: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [file, setFile] = useState<File>();
+  const [rows, setRows] = useState<ImportRow[]>([]);
+  const [statementHash, setStatementHash] = useState("");
+  const [statementPeriod, setStatementPeriod] = useState<{ start: string; end: string } | null>(null);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [sample, setSample] = useState<string[][]>([]);
+  const [mappingRequired, setMappingRequired] = useState(false);
+  const [mapping, setMapping] = useState<Record<keyof CsvColumnMapping, string>>({
+    date: "", description: "", postedDate: "", amount: "", debit: "", credit: "", type: "", cardholder: "",
+  });
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [committing, setCommitting] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<{ imported: number; skipped: number; failed: number }>();
+  const requestRef = useRef<XMLHttpRequest | null>(null);
+  const cancelRequested = useRef(false);
+
+  function resetImport() {
+    cancelRequested.current = true;
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setFile(undefined);
+    setRows([]);
+    setStatementHash("");
+    setStatementPeriod(null);
+    setHeaders([]);
+    setSample([]);
+    setMappingRequired(false);
+    setUploadProgress(0);
+    setError("");
+    setResult(undefined);
+    setUploading(false);
+    setCommitting(false);
+  }
+
+  function uploadAndParse(form: FormData, token: string) {
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      requestRef.current = request;
+      request.open("POST", "/api/transaction-import/parse");
+      request.setRequestHeader("Authorization", `Bearer ${token}`);
+      request.setRequestHeader("X-Household-Id", householdId);
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable) setUploadProgress(Math.min(99, Math.round(event.loaded / event.total * 100)));
+      };
+      request.onerror = () => reject(new Error("Upload failed. Check your connection and try again."));
+      request.onabort = () => reject(new Error("Upload cancelled."));
+      request.onload = () => {
+        requestRef.current = null;
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(request.responseText) as Record<string, unknown>;
+        } catch {
+          reject(new Error("The server returned an invalid response. Try again."));
+          return;
+        }
+        if (request.status < 200 || request.status >= 300) {
+          reject(new Error(typeof payload.error === "string" ? payload.error : "Could not parse this statement."));
+          return;
+        }
+        resolve(payload);
+      };
+      request.send(form);
+    });
+  }
+
+  async function parseSelectedFile(columnMapping?: CsvColumnMapping) {
+    if (!file) {
+      setError("Choose a PDF or CSV statement first.");
+      return;
+    }
+    setError("");
+    setResult(undefined);
+    setUploading(true);
+    setUploadProgress(0);
+    cancelRequested.current = false;
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Sign in again before importing transactions.");
+      const form = new FormData();
+      form.set("file", file);
+      if (columnMapping) form.set("mapping", JSON.stringify(columnMapping));
+      const payload = await uploadAndParse(form, await user.getIdToken());
+      if (cancelRequested.current) return;
+      setUploadProgress(100);
+      setHeaders(Array.isArray(payload.headers) ? payload.headers as string[] : []);
+      setSample(Array.isArray(payload.sample) ? payload.sample as string[][] : []);
+      setMappingRequired(payload.mappingRequired === true);
+      setRows(Array.isArray(payload.rows) ? payload.rows as ImportRow[] : []);
+      setStatementHash(typeof payload.statementHash === "string" ? payload.statementHash : "");
+      setStatementPeriod(payload.statementPeriod && typeof payload.statementPeriod === "object"
+        ? payload.statementPeriod as { start: string; end: string }
+        : null);
+      if (payload.mappingRequired !== true && !Array.isArray(payload.rows)) {
+        throw new Error("The server returned an invalid statement preview.");
+      }
+    } catch (cause) {
+      if (!cancelRequested.current) setError(cause instanceof Error ? cause.message : "The statement could not be parsed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function submitMapping(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amountColumns = [mapping.amount, mapping.debit, mapping.credit].filter(Boolean);
+    if (!mapping.date || !mapping.description || amountColumns.length === 0) {
+      setError("Choose a date, description, and amount column (or debit/credit columns).");
+      return;
+    }
+    const mapped: CsvColumnMapping = {
+      date: Number(mapping.date),
+      description: Number(mapping.description),
+      ...(mapping.postedDate ? { postedDate: Number(mapping.postedDate) } : {}),
+      ...(mapping.amount ? { amount: Number(mapping.amount) } : {}),
+      ...(mapping.debit ? { debit: Number(mapping.debit) } : {}),
+      ...(mapping.credit ? { credit: Number(mapping.credit) } : {}),
+      ...(mapping.type ? { type: Number(mapping.type) } : {}),
+      ...(mapping.cardholder ? { cardholder: Number(mapping.cardholder) } : {}),
+    };
+    void parseSelectedFile(mapped);
+  }
+
+  function updateRow(sourceRow: number, update: Partial<ImportRow>, clearWarning?: (warning: string) => boolean) {
+    setRows((current) => current.map((row) => row.sourceRow === sourceRow
+      ? {
+          ...row,
+          ...update,
+          warnings: clearWarning ? row.warnings.filter((warning) => !clearWarning(warning)) : row.warnings,
+        }
+      : row));
+  }
+
+  function rowReady(row: ImportRow) {
+    return !row.alreadyImported
+      && row.type !== "payment"
+      && isCalendarDate(row.date)
+      && Boolean(row.description.trim())
+      && row.description.length <= 240
+      && Number.isSafeInteger(row.amountMinor)
+      && row.amountMinor > 0
+      && row.warnings.length === 0;
+  }
+
+  const readyRows = rows.filter(rowReady);
+  const selectedRows = rows.filter((row) => row.included && rowReady(row));
+  const selectedTotal = selectedRows.reduce((sum, row) => sum + row.amountMinor, 0);
+  const canMap = Boolean(mapping.date && mapping.description && (mapping.amount || mapping.debit || mapping.credit));
+
+  async function commitImport() {
+    if (!selectedRows.length || !statementHash) return;
+    setError("");
+    setCommitting(true);
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Sign in again before importing transactions.");
+      const response = await fetch("/api/transaction-import/commit", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await user.getIdToken()}`,
+          "X-Household-Id": householdId,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          householdId,
+          statementHash,
+          rows: selectedRows.map((row) => ({
+            sourceRow: row.sourceRow,
+            date: row.date,
+            description: row.description,
+            amountMinor: row.amountMinor,
+            type: row.type,
+            category: row.category,
+          })),
+        }),
+      });
+      const payload = await response.json() as Record<string, unknown>;
+      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : "The selected transactions could not be imported.");
+      if (!Number.isSafeInteger(payload.imported) || !Number.isSafeInteger(payload.skipped) || !Number.isSafeInteger(payload.failed)) {
+        throw new Error("The server returned an invalid import summary.");
+      }
+      const summary = {
+        imported: Number(payload.imported),
+        skipped: Number(payload.skipped),
+        failed: Number(payload.failed),
+      };
+      setResult(summary);
+      await onImported();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The transactions could not be imported. Retry safely; duplicate protection is enabled.");
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  const detectedDuplicate = (row: ImportRow) => transactions.some((transaction) =>
+    transaction.date === row.date
+    && transaction.amountMinor === row.amountMinor
+    && transaction.description.trim().toLowerCase().replace(/\s+/g, " ") === row.description.trim().toLowerCase().replace(/\s+/g, " ")
+    && (row.type === "debit" ? transaction.type === "debit" && transaction.purpose === "ordinary"
+      : row.type === "income" ? transaction.type === "credit" && transaction.purpose === "income"
+        : row.type === "refund" && transaction.type === "credit" && transaction.purpose === "ordinary"),
+  );
+
+  return (
+    <section className="rounded-2xl border border-teal-200 bg-white p-5 shadow-sm" aria-label="Import transactions">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="font-bold">Import transactions</h2>
+          <p className="mt-1 text-sm text-slate-600">Upload a Capital One text-based PDF statement or a CSV export. Review the dates, categories, and transactions before confirming. Imported transactions are not linked to an account.</p>
+        </div>
+        <button type="button" onClick={() => { resetImport(); onClose(); }} className={secondaryButtonClass}>Cancel</button>
+      </div>
+      {!result && <>
+        <div className="mt-4 grid gap-3">
+          <label className="block text-sm font-medium">Statement file
+            <input type="file" accept=".pdf,.csv,application/pdf,text/csv" aria-label="Statement file" disabled={uploading || committing} onChange={(event) => {
+              setFile(event.target.files?.[0]);
+              setRows([]);
+              setStatementHash("");
+              setMappingRequired(false);
+              setError("");
+            }} className={`${inputClass} mt-1 file:mr-3 file:rounded-md file:border-0 file:bg-teal-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-teal-800`} />
+            <span className="mt-1 block text-xs text-slate-500">PDF or CSV, up to 10 MB. Scanned PDFs are not supported.</span>
+          </label>
+        </div>
+        {file && !mappingRequired && !rows.length && <button type="button" disabled={uploading || committing} onClick={() => void parseSelectedFile()} className={`${buttonClass} mt-4`}>{uploading ? "Uploading and parsing…" : "Review statement"}</button>}
+        {uploading && <div className="mt-4" role="status" aria-live="polite">
+          <div className="flex items-center justify-between text-xs text-slate-600"><span>{uploadProgress >= 100 ? "Uploaded — extracting transactions…" : "Uploading statement…"}</span><span>{uploadProgress}%</span></div>
+          <progress aria-label="Statement upload progress" max={100} value={uploadProgress} className="mt-1 h-2 w-full accent-teal-700" />
+          <button type="button" onClick={resetImport} className="mt-2 text-xs font-semibold text-slate-500 underline">Cancel upload</button>
+        </div>}
+        {mappingRequired && <form onSubmit={submitMapping} className="mt-5 space-y-4 rounded-xl bg-slate-50 p-4">
+          <div><h3 className="font-semibold">Match your CSV columns</h3><p className="mt-1 text-sm text-slate-600">We could not recognize the column names. Choose which columns contain transaction details.</p></div>
+          {sample.length > 0 && <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white"><table className="min-w-full text-left text-xs"><thead><tr>{headers.map((header, index) => <th key={index} className="px-2 py-2 font-semibold">{header || `Column ${index + 1}`}</th>)}</tr></thead><tbody>{sample.slice(0, 2).map((record, rowIndex) => <tr key={rowIndex} className="border-t border-slate-100">{headers.map((_, columnIndex) => <td key={columnIndex} className="max-w-36 truncate px-2 py-2">{record[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div>}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {(["date", "description", "amount", "debit", "credit", "postedDate", "type", "cardholder"] as const).map((field) => <label key={field} className="block text-sm font-medium">{field === "postedDate" ? "Posted date (optional)" : field === "cardholder" ? "Cardholder (optional)" : field === "debit" ? "Debit amount (optional)" : field === "credit" ? "Credit amount (optional)" : field === "type" ? "Transaction type (optional)" : `${field[0].toUpperCase()}${field.slice(1)}${field === "date" || field === "description" || field === "amount" ? " *" : ""}`}
+              <select required={field === "date" || field === "description"} value={mapping[field]} onChange={(event) => setMapping((current) => ({ ...current, [field]: event.target.value }))} className={`${inputClass} mt-1`}>
+                <option value="">Do not use</option>{headers.map((header, index) => <option key={index} value={String(index)}>{header || `Column ${index + 1}`}</option>)}
+              </select>
+            </label>)}
+          </div>
+          <div className="flex flex-wrap gap-2"><button type="submit" disabled={!canMap || uploading} className={buttonClass}>{uploading ? "Uploading and parsing…" : "Continue to review"}</button><button type="button" onClick={resetImport} className={secondaryButtonClass}>Start over</button></div>
+        </form>}
+        {rows.length > 0 && <>
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-y border-slate-100 py-3">
+            <div><h3 className="font-semibold">Review extracted transactions</h3><p className="mt-1 text-xs text-slate-500">{rows.length} rows{statementPeriod ? ` · Statement period ${statementPeriod.start} to ${statementPeriod.end}` : ""}{rows.some((row) => row.alreadyImported) ? " · Previously imported rows are unchecked" : ""}</p></div>
+            <button type="button" disabled={!readyRows.length} onClick={() => {
+              const selectAll = !readyRows.every((row) => row.included);
+              setRows((current) => current.map((row) => rowReady(row) ? { ...row, included: selectAll } : row));
+            }} className={secondaryButtonClass}>{readyRows.length > 0 && readyRows.every((row) => row.included) ? "Deselect valid" : "Select valid"}</button>
+          </div>
+          <div className="mt-3 space-y-3">
+            {rows.map((row) => {
+              const valid = rowReady(row);
+              const duplicate = detectedDuplicate(row);
+              const clearTypeWarnings = (warning: string) => warning.includes("transaction type") || warning.includes("type was not provided") || warning.includes("interpreted as a refund");
+              return <article key={row.sourceRow} className={`rounded-xl border p-3 sm:p-4 ${valid ? "border-slate-200" : "border-amber-300 bg-amber-50/40"}`}>
+                <div className="flex items-start gap-3">
+                  <input type="checkbox" aria-label={`Import ${row.description || `row ${row.sourceRow}`}`} checked={row.included && valid} disabled={!valid || committing} onChange={(event) => updateRow(row.sourceRow, { included: event.target.checked })} className="mt-2 h-4 w-4 accent-teal-700" />
+                  <div className="grid min-w-0 flex-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1.5fr_1fr_1fr_1fr_1fr]">
+                    <label className="text-xs font-medium text-slate-600">Date
+                      <input type="date" aria-label={`Date row ${row.sourceRow}`} value={row.date} onChange={(event) => updateRow(row.sourceRow, { date: event.target.value }, (warning) => warning.includes("transaction date"))} className={`${inputClass} mt-1`} />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">Merchant / description
+                      <input aria-label={`Description row ${row.sourceRow}`} maxLength={240} value={row.description} onChange={(event) => updateRow(row.sourceRow, { description: event.target.value }, (warning) => warning.includes("merchant or description") || warning.includes("description is too long"))} className={`${inputClass} mt-1`} />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">Amount ({currency})
+                      <input aria-label={`Amount row ${row.sourceRow}`} inputMode="decimal" value={row.amountMinor ? moneyInputValue(row.amountMinor, currency) : ""} onChange={(event) => {
+                        try {
+                          const amountMinor = parseMoneyToMinorUnits(event.target.value, currency);
+                          updateRow(row.sourceRow, { amountMinor }, (warning) => warning.includes("amount") || warning.includes("interpreted as a refund"));
+                        } catch {
+                          updateRow(row.sourceRow, { amountMinor: 0 }, (warning) => warning.includes("amount"));
+                        }
+                      }} className={`${inputClass} mt-1`} />
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">Type
+                      <select aria-label={`Type row ${row.sourceRow}`} value={row.type} onChange={(event) => updateRow(row.sourceRow, { type: event.target.value as ImportTransactionType, included: true }, clearTypeWarnings)} className={`${inputClass} mt-1`}>
+                        <option value="debit">Expense</option><option value="income">Income</option><option value="refund">Refund</option><option value="payment">Payment (skip)</option>
+                      </select>
+                    </label>
+                    <label className="text-xs font-medium text-slate-600">Category
+                      <select aria-label={`Category row ${row.sourceRow}`} value={row.category} onChange={(event) => updateRow(row.sourceRow, { category: event.target.value })} className={`${inputClass} mt-1`}>
+                        {TRANSACTION_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+                      </select>
+                    </label>
+                    {(row.postedDate || row.cardholder) && <p className="text-xs text-slate-500 md:col-span-2 xl:col-span-full">{row.postedDate && `Posted ${row.postedDate}`}{row.postedDate && row.cardholder ? " · " : ""}{row.cardholder && `Cardholder: ${row.cardholder}`}</p>}
+                    {(row.warnings.length > 0 || duplicate || row.alreadyImported) && <div className="space-y-1 text-xs md:col-span-2 xl:col-span-full">
+                      {row.warnings.map((warning, index) => <p key={index} className="text-amber-800">{warning}</p>)}
+                      {duplicate && <p className="text-amber-800">Possible duplicate: an existing transaction matches this date, account, amount, type, and description. Review before importing.</p>}
+                    </div>}
+                  </div>
+                </div>
+              </article>;
+            })}
+          </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <p className="text-sm text-slate-700">{selectedRows.length} selected · {formatMoney(selectedTotal, currency)} total</p>
+            <button type="button" disabled={!selectedRows.length || committing} onClick={() => void commitImport()} className={buttonClass}>{committing ? "Importing…" : `Import ${selectedRows.length} selected`}</button>
+          </div>
+        </>}
+      </>}
+      {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+      {result && <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4" role="status">
+        <h3 className="font-semibold text-emerald-900">Import complete</h3>
+        <p className="mt-1 text-sm text-emerald-900">{result.imported} imported · {result.skipped} already imported · {result.failed} failed</p>
+        <button type="button" onClick={() => { resetImport(); onClose(); }} className={`${secondaryButtonClass} mt-3`}>Done</button>
+      </div>}
+    </section>
+  );
+}
+
 function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrevious, onDelete, editing, setEditing }: {
   finance: HouseholdFinanceData; currency: string; month: string; setMonth: (value: string) => void; onSave: (input: Pick<MonthlyBudget, "month" | "period" | "category" | "limitMinor">, existing?: MonthlyBudget) => Promise<void>; onCopyPrevious: (sourceMonth: string, targetMonth: string) => Promise<void>; onDelete: (id: string) => Promise<void>; editing?: MonthlyBudget; setEditing: (item?: MonthlyBudget) => void;
 }) {
-  const [category, setCategory] = useState(""); const [limit, setLimit] = useState(""); const [period, setPeriod] = useState<"monthly" | "yearly">("monthly"); const [error, setError] = useState("");
+  const [category, setCategory] = useState(""); const [limit, setLimit] = useState(""); const [period, setPeriod] = useState<"monthly" | "yearly">("monthly"); const [error, setError] = useState(""); const [showEditor, setShowEditor] = useState(Boolean(editing));
   const editorRef = useEditFocus<HTMLElement>(editing?.id);
+  const addBudgetButtonRef = useRef<HTMLButtonElement>(null);
   // Reset controlled form fields when a different record is selected.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setCategory(editing?.category ?? ""); setLimit(moneyInputValue(editing?.limitMinor, currency)); setPeriod(editing?.period ?? "monthly"); if (editing) setMonth(editing.month); }, [editing, setMonth, currency]);
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); try { await onSave({ month: period === "yearly" ? `${month.slice(0, 4)}-01` : month, period, category, limitMinor: parseMoneyToMinorUnits(limit, currency) }, editing); setEditing(undefined); setCategory(""); setLimit(""); setPeriod("monthly"); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save budget."); } }
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setShowEditor(Boolean(editing)); }, [editing]);
+  useEffect(() => {
+    if (!showEditor) return;
+    function dismissOnOutsideClick(event: PointerEvent) {
+      if (!(event.target instanceof Node)) return;
+      if (editorRef.current?.contains(event.target) || addBudgetButtonRef.current?.contains(event.target)) return;
+      setShowEditor(false);
+      setEditing(undefined);
+      setError("");
+    }
+    document.addEventListener("pointerdown", dismissOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", dismissOnOutsideClick);
+  }, [editorRef, showEditor, setEditing]);
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); try { await onSave({ month: period === "yearly" ? `${month.slice(0, 4)}-01` : month, period, category, limitMinor: parseMoneyToMinorUnits(limit, currency) }, editing); setEditing(undefined); setCategory(""); setLimit(""); setPeriod("monthly"); setShowEditor(false); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save budget."); } }
   const rows = finance.budgets.filter((item) => (item.period ?? "monthly") === "yearly" ? item.month.slice(0, 4) === month.slice(0, 4) : item.month === month);
   const previousMonth = isMonthKey(month) ? previousMonthKey(month) : "";
   const previousMonthBudgetCount = finance.budgets.filter((item) => (item.period ?? "monthly") === "monthly" && item.month === previousMonth).length;
@@ -1056,22 +1432,27 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
   return (
     <div className="space-y-5">
       <FeatureHeading section="Budgets" title="Budgets" description="Set monthly limits and track household spending by category." />
-      <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
-        <section ref={editorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5 transition-shadow hover:shadow-md">
-          <div className="mb-4 flex items-center gap-2"><span className="rounded-lg bg-amber-50 p-2 text-amber-700"><WorkspaceIcon section="Budgets" /></span><h2 className="font-bold">{editing ? "Edit budget" : `Create a ${period} budget`}</h2></div>
-          <form onSubmit={submit} className="space-y-3">
-            <label className="block text-sm font-medium">Budget period<select value={period} onChange={(event) => setPeriod(event.target.value as "monthly" | "yearly")} className={`${inputClass} mt-1`}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></label>
-            <label className="block text-sm font-medium">{period === "monthly" ? "Budget month" : "Budget year"}{period === "monthly" ? <input type="month" required value={month} onChange={(event) => setMonth(event.target.value)} className={`${inputClass} mt-1`} /> : <input type="number" required min="1900" max="9999" value={month.slice(0, 4)} onChange={(event) => setMonth(`${event.target.value}-01`)} className={`${inputClass} mt-1`} />}</label>
-            <label className="block text-sm font-medium">Transaction category<select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}><option value="" disabled>Choose an expense category</option>{editing?.category && !(BUDGET_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{editing.category} (existing)</option>}{BUDGET_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
-            <label className="block text-sm font-medium">{period === "monthly" ? "Monthly limit" : "Yearly limit"}<input required inputMode="decimal" value={limit} onChange={(event) => setLimit(event.target.value)} placeholder={`Amount (${currency})`} className={`${inputClass} mt-1`} /></label>
-            <div className="flex flex-wrap gap-2"><button className={buttonClass}>{editing ? "Save" : "Add"}</button>{editing && <button type="button" onClick={() => setEditing(undefined)} className={secondaryButtonClass}>Cancel</button>}{!editing && <button type="button" disabled={!previousMonth || !previousMonthBudgetCount || copyingPreviousMonth} onClick={() => void copyPreviousMonth()} className={`${secondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}>{copyingPreviousMonth ? "Copying…" : "Copy prev month"}</button>}</div>
-            {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-            {!editing && <p className="text-xs text-slate-500">Copies all monthly category limits from {previousMonth || "the previous month"} into {month || "the selected month"}, updating matching categories and adding any missing ones.</p>}
-          </form>
-        </section>
+      <div className="grid gap-6">
         <section className="rounded-2xl border border-slate-200 bg-white p-5 transition-shadow hover:shadow-md">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2"><span className="rounded-lg bg-amber-50 p-2 text-amber-700"><WorkspaceIcon section="Budgets" /></span><div><h2 className="font-bold">Budget progress</h2><p className="text-xs text-slate-500">Monthly progress for {month}; yearly progress accumulates across {month.slice(0, 4)}.</p></div></div>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="rounded-lg bg-teal-50 p-2 text-teal-700"><WorkspaceIcon section="Budgets" /></span><div><h2 className="font-bold">Budget progress</h2><p className="text-xs text-slate-500">Monthly progress for {month}; yearly progress accumulates across {month.slice(0, 4)}.</p></div>
+            </div>
+            {!editing && <button ref={addBudgetButtonRef} type="button" aria-label={showEditor ? "Close budget form" : "Add budget"} aria-expanded={showEditor} aria-controls={showEditor ? "budget-editor" : undefined} onClick={() => { setShowEditor((open) => !open); setError(""); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xl font-semibold text-teal-800 transition hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{showEditor ? "−" : "+"}</button>}
+          </div>
+          {showEditor && <section id="budget-editor" ref={editorRef} className="edit-focus-target mt-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
+              <div className="mb-3 font-semibold">{editing ? "Edit budget" : `Create a ${period} budget`}</div>
+              <form onSubmit={submit} className="space-y-3">
+                <label className="block text-sm font-medium">Budget period<select value={period} onChange={(event) => setPeriod(event.target.value as "monthly" | "yearly")} className={`${inputClass} mt-1`}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></label>
+                <label className="block text-sm font-medium">{period === "monthly" ? "Budget month" : "Budget year"}{period === "monthly" ? <input type="month" required value={month} onChange={(event) => setMonth(event.target.value)} className={`${inputClass} mt-1`} /> : <input type="number" required min="1900" max="9999" value={month.slice(0, 4)} onChange={(event) => setMonth(`${event.target.value}-01`)} className={`${inputClass} mt-1`} />}</label>
+                <label className="block text-sm font-medium">Transaction category<select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}><option value="" disabled>Choose an expense category</option>{editing?.category && !(BUDGET_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{editing.category} (existing)</option>}{BUDGET_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+                <label className="block text-sm font-medium">{period === "monthly" ? "Monthly limit" : "Yearly limit"}<input required inputMode="decimal" value={limit} onChange={(event) => setLimit(event.target.value)} placeholder={`Amount (${currency})`} className={`${inputClass} mt-1`} /></label>
+                <div className="flex flex-wrap gap-2"><button className={buttonClass}>{editing ? "Save" : "Add"}</button><button type="button" onClick={() => { setEditing(undefined); setShowEditor(false); setCategory(""); setLimit(""); setPeriod("monthly"); setError(""); }} className={secondaryButtonClass}>Cancel</button>{!editing && <button type="button" disabled={!previousMonth || !previousMonthBudgetCount || copyingPreviousMonth} onClick={() => void copyPreviousMonth()} className={`${secondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}>{copyingPreviousMonth ? "Copying…" : "Copy prev month"}</button>}</div>
+                {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+                {!editing && <p className="text-xs text-slate-500">Copies all monthly category limits from {previousMonth || "the previous month"} into {month || "the selected month"}, updating matching categories and adding any missing ones.</p>}
+              </form>
+          </section>}
+          <div className="mt-4 flex justify-end">
             <label className="text-xs font-medium text-slate-500">Month<input aria-label="Budget month" type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-700 transition focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-100" /></label>
           </div>
           <div className="mt-5 space-y-5">
@@ -1080,7 +1461,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
               const width = Math.min(progress.percent, 100);
               return <div key={budget.id} className="rounded-xl p-3 transition-colors hover:bg-slate-50">
                 <div className="flex justify-between gap-3 text-sm">
-                  <div className="flex items-center gap-2"><span className={`rounded-lg p-1.5 ${progress.overspent ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}><WorkspaceIcon section="Budgets" /></span><div><span className="font-medium">{budget.category} <span className="text-xs font-normal text-slate-500">({(budget.period ?? "monthly")})</span></span><p className={`text-xs ${progress.overspent ? "text-red-700" : "text-slate-500"}`}>{progress.overspent ? `${formatMoney(Math.abs(progress.remainingMinor), currency)} over budget` : `${formatMoney(progress.remainingMinor, currency)} remaining`}</p></div></div>
+                  <div className="flex items-center gap-2"><span className={`rounded-lg p-1.5 ${progress.overspent ? "bg-red-50 text-red-700" : "bg-teal-50 text-teal-700"}`}><WorkspaceIcon section="Budgets" /></span><div><span className="font-medium">{budget.category} <span className="text-xs font-normal text-slate-500">({(budget.period ?? "monthly")})</span></span><p className={`text-xs ${progress.overspent ? "text-red-700" : "text-slate-500"}`}>{progress.overspent ? `${formatMoney(Math.abs(progress.remainingMinor), currency)} over budget` : `${formatMoney(progress.remainingMinor, currency)} remaining`}</p></div></div>
                   <span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-600"}>{formatMoney(progress.spentMinor, currency)} / {formatMoney(budget.limitMinor, currency)}</span>
                 </div>
                 <div role="progressbar" aria-label={`${budget.category} budget used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={width} className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-[width] duration-500 ${progress.overspent ? "bg-red-500" : "bg-amber-500"}`} style={{ width: `${width}%` }} /></div>
@@ -1115,11 +1496,27 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
   const [progressAmount, setProgressAmount] = useState("");
   const [progressError, setProgressError] = useState("");
   const [savingProgress, setSavingProgress] = useState(false);
+  const [showEditor, setShowEditor] = useState(Boolean(editing));
   const editorRef = useEditFocus<HTMLElement>(editing?.id);
+  const addGoalButtonRef = useRef<HTMLButtonElement>(null);
 
   // Reset controlled form fields when a different record is selected.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setName(editing?.name ?? ""); setTarget(moneyInputValue(editing?.targetMinor, currency)); setCurrent(moneyInputValue(editing?.currentMinor, currency) || "0"); setDeadline(editing?.deadline ?? ""); }, [editing, currency]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setShowEditor(Boolean(editing)); }, [editing]);
+  useEffect(() => {
+    if (!showEditor) return;
+    function dismissOnOutsideClick(event: PointerEvent) {
+      if (!(event.target instanceof Node)) return;
+      if (editorRef.current?.contains(event.target) || addGoalButtonRef.current?.contains(event.target)) return;
+      setShowEditor(false);
+      setEditing(undefined);
+      setError("");
+    }
+    document.addEventListener("pointerdown", dismissOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", dismissOnOutsideClick);
+  }, [editorRef, showEditor, setEditing]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1137,6 +1534,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
       setTarget("");
       setCurrent("0");
       setDeadline("");
+      setShowEditor(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save goal.");
     }
@@ -1163,25 +1561,24 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
   return (
     <div className="space-y-5">
       <FeatureHeading section="Goals" title="Savings goals" description="Plan for your targets and see progress grow as you contribute." />
-      <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
-      <section ref={editorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="mb-4 flex items-center gap-2"><span className="rounded-lg bg-violet-50 p-2 text-violet-700"><WorkspaceIcon section="Goals" /></span><h2 className="font-bold">{editing ? "Edit goal" : "Create a savings goal"}</h2></div>
-        <form onSubmit={submit} className="mt-4 space-y-3">
-          <input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Goal name" className={inputClass} />
-          <div className="grid grid-cols-2 gap-2">
-            <input required inputMode="decimal" value={target} onChange={(event) => setTarget(event.target.value)} placeholder={`Target (${currency})`} className={inputClass} />
-            <input required inputMode="decimal" value={current} onChange={(event) => setCurrent(event.target.value)} placeholder="Current progress" className={inputClass} />
-          </div>
-          <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} className={inputClass} />
-          <div className="flex gap-2">
-            <button className={buttonClass}>{editing ? "Save" : "Add"}</button>
-            {editing && <button type="button" onClick={() => setEditing(undefined)} className={secondaryButtonClass}>Cancel</button>}
-          </div>
-          {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-        </form>
-      </section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="mb-4 flex items-center gap-2"><span className="rounded-lg bg-violet-50 p-2 text-violet-700"><WorkspaceIcon section="Goals" /></span><h2 className="font-bold">Household goals</h2></div>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2"><span className="rounded-lg bg-teal-50 p-2 text-teal-700"><WorkspaceIcon section="Goals" /></span><h2 className="font-bold">Household goals</h2></div>
+          {!editing && <button ref={addGoalButtonRef} type="button" aria-label={showEditor ? "Close goal form" : "Add goal"} aria-expanded={showEditor} aria-controls={showEditor ? "goal-editor" : undefined} onClick={() => { setShowEditor((open) => !open); setError(""); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xl font-semibold text-teal-800 transition hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{showEditor ? "−" : "+"}</button>}
+        </div>
+        {showEditor && <section id="goal-editor" ref={editorRef} className="edit-focus-target mb-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
+          <div className="mb-3 font-semibold">{editing ? "Edit goal" : "Create a savings goal"}</div>
+          <form onSubmit={submit} className="space-y-3">
+            <input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Goal name" className={inputClass} />
+            <div className="grid grid-cols-2 gap-2">
+              <input required inputMode="decimal" value={target} onChange={(event) => setTarget(event.target.value)} placeholder={`Target (${currency})`} className={inputClass} />
+              <input required inputMode="decimal" value={current} onChange={(event) => setCurrent(event.target.value)} placeholder="Current progress" className={inputClass} />
+            </div>
+            <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} className={inputClass} />
+            <div className="flex gap-2"><button className={buttonClass}>{editing ? "Save" : "Add"}</button><button type="button" onClick={() => { setEditing(undefined); setShowEditor(false); setName(""); setTarget(""); setCurrent("0"); setDeadline(""); setError(""); }} className={secondaryButtonClass}>Cancel</button></div>
+            {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+          </form>
+        </section>}
         <div className="mt-4 space-y-4">
           {finance.goals.map((goal) => {
             const pct = goalProgressPercent(goal.currentMinor, goal.targetMinor);
@@ -1220,7 +1617,6 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
           {!finance.goals.length && <p className="text-sm text-slate-500">No goals yet.</p>}
         </div>
       </section>
-      </div>
     </div>
   );
 }
@@ -1482,12 +1878,14 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   </div>;
 }
 
-function HouseholdSection({ householdName, uid, households, activeHouseholdId, onSelectHousehold, onRenameHousehold, onCreateHousehold, onJoinHousehold, isOwner, members, invitationCode, onInvite, onPromoteMember, onTransferOwnership, updatingOwnership }: {
+function HouseholdSection({ householdName, uid, households, activeHouseholdId, defaultHouseholdId, onSelectHousehold, onSetDefaultHousehold, onRenameHousehold, onCreateHousehold, onJoinHousehold, isOwner, members, invitationCode, onInvite, onPromoteMember, onTransferOwnership, updatingOwnership }: {
   householdName: string;
   uid: string;
   households: HouseholdMembership[];
   activeHouseholdId: string;
+  defaultHouseholdId: string;
   onSelectHousehold: (householdId: string) => void;
+  onSetDefaultHousehold: (householdId: string) => void;
   onRenameHousehold: (name: string) => Promise<void>;
   onCreateHousehold: (name: string, currency: HouseholdCurrency) => Promise<void>;
   onJoinHousehold: (code: string) => Promise<void>;
@@ -1557,7 +1955,7 @@ function HouseholdSection({ householdName, uid, households, activeHouseholdId, o
     <div className="grid gap-6 xl:grid-cols-2">
       <section className="rounded-2xl border border-slate-200 bg-white p-5 xl:col-span-2">
         <h2 className="font-bold">Your households</h2>
-        <p className="mt-1 text-sm text-slate-600">Switch between your household workspaces. Each one keeps its finances separate.</p>
+        <p className="mt-1 text-sm text-slate-600">Switch between household workspaces, or set a default to open it automatically on this device next time.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {households.map((household) => {
             const active = household.householdId === activeHouseholdId;
@@ -1576,9 +1974,14 @@ function HouseholdSection({ householdName, uid, households, activeHouseholdId, o
                     {householdNameError && <p role="alert" className="basis-full text-xs text-red-700">{householdNameError}</p>}
                   </form>}
                 </div>
-                <button type="button" disabled={active} onClick={() => onSelectHousehold(household.householdId)} className={active ? "shrink-0 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white" : `${secondaryButtonClass} shrink-0`}>
-                  {active ? "Current" : "Switch"}
-                </button>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <button type="button" disabled={active} onClick={() => onSelectHousehold(household.householdId)} className={active ? "rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white" : `${secondaryButtonClass} shrink-0`}>
+                    {active ? "Current" : "Switch"}
+                  </button>
+                  {households.length > 1 && (household.householdId === defaultHouseholdId
+                    ? <span className="rounded-full bg-teal-50 px-2.5 py-1.5 text-xs font-semibold text-teal-800">Default</span>
+                    : <button type="button" onClick={() => onSetDefaultHousehold(household.householdId)} className={`${secondaryButtonClass} px-2.5 py-1.5 text-xs`}>Set as default</button>)}
+                </div>
               </article>
             );
           })}
