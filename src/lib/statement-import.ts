@@ -38,7 +38,7 @@ export type ParsedStatement = {
   statementHash: string;
 };
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_CSV_ROWS = 1001;
 const MAX_DESCRIPTION_LENGTH = 240;
 const PAYMENT_PATTERN = /\b(payment received|payment\s*[-:]\s*thank you|payment thank you|autopay(?:ment)?|automatic payment|online payment|card payment|payment - received|payment posted)\b/i;
@@ -356,7 +356,7 @@ function parsePdfCardholder(lines: string[]) {
 }
 
 export async function parseCapitalOnePdf(buffer: Buffer, currency: HouseholdCurrency): Promise<ParsedStatement> {
-  if (buffer.length > MAX_FILE_BYTES) throw new Error("The statement exceeds the 10 MB file limit.");
+  if (buffer.length > MAX_FILE_BYTES) throw new Error("The statement exceeds the 4 MiB file limit.");
   if (buffer.subarray(0, 5).toString("ascii") !== "%PDF-") throw new Error("This file is not a valid PDF.");
   let lines: string[];
   try {

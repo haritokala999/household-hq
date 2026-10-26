@@ -67,5 +67,5 @@ export function routeErrorResponse(cause: unknown) {
   return Response.json({ error: "The statement could not be processed. Try again or use a CSV export." }, { status: 500 });
 }
 
-export const MAX_STATEMENT_BYTES = 10 * 1024 * 1024;
+export const MAX_STATEMENT_BYTES = 4 * 1024 * 1024;
 export const MAX_IMPORTED_TRANSACTIONS = 250;

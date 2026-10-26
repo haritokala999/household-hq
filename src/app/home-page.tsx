@@ -88,6 +88,8 @@ const currencyFlags: Record<HouseholdCurrency, string> = {
 const inputClass = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-600";
 const buttonClass = "rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60";
 const secondaryButtonClass = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800";
+const TRANSACTION_PAGE_SIZE = 10;
+const INVESTMENT_ACTIVITY_PAGE_SIZE = 8;
 const emptyFinance: HouseholdFinanceData = {
   accounts: [], categories: [], transactions: [], budgets: [], goals: [], assets: [], liabilities: [], recurringPayments: [],
 };
@@ -833,6 +835,28 @@ function financeMemberOptions(names: Map<string, string>, currentUid: string) {
   return entries.map(([id, name]) => <option key={id} value={id}>{name}</option>);
 }
 
+function PaginationControls({ page, pageCount, total, pageSize, label, onPageChange }: {
+  page: number;
+  pageCount: number;
+  total: number;
+  pageSize: number;
+  label: string;
+  onPageChange: (page: number) => void;
+}) {
+  if (total <= pageSize) return null;
+  const firstItem = (page - 1) * pageSize + 1;
+  const lastItem = Math.min(page * pageSize, total);
+
+  return <nav aria-label={`${label} pages`} className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+    <p className="text-xs text-slate-500">Showing {firstItem}–{lastItem} of {total}</p>
+    <div className="flex items-center gap-2">
+      <button type="button" onClick={() => onPageChange(page - 1)} disabled={page <= 1} className={secondaryButtonClass}>Previous</button>
+      <span aria-live="polite" className="min-w-20 text-center text-xs text-slate-600">Page {page} of {pageCount}</span>
+      <button type="button" onClick={() => onPageChange(page + 1)} disabled={page >= pageCount} className={secondaryButtonClass}>Next</button>
+    </div>
+  </nav>;
+}
+
 function TransactionsSection({ finance, currency, householdId, uid, memberNames, filter, setFilter, typeFilter, setTypeFilter, onSave, onDelete, onImportComplete, editing, setEditing }: {
   finance: HouseholdFinanceData;
   currency: HouseholdCurrency;
@@ -851,6 +875,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
 }) {
   const [showImport, setShowImport] = useState(false);
   const [showEditor, setShowEditor] = useState(Boolean(editing));
+  const [transactionPage, setTransactionPage] = useState(1);
   const [type, setType] = useState<FinancialTransaction["type"]>("debit");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
@@ -927,6 +952,9 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
       return searchable.toLowerCase().includes(normalizedFilter);
     })
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.toMillis() - a.createdAt.toMillis());
+  const transactionPageCount = Math.max(1, Math.ceil(rows.length / TRANSACTION_PAGE_SIZE));
+  const safeTransactionPage = Math.min(transactionPage, transactionPageCount);
+  const visibleTransactions = rows.slice((safeTransactionPage - 1) * TRANSACTION_PAGE_SIZE, safeTransactionPage * TRANSACTION_PAGE_SIZE);
   function cancelTransferDialog() {
     setShowTransferDialog(false);
     setType(editing?.type ?? "debit");
@@ -1020,8 +1048,8 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             <p className="mt-1 text-xs text-slate-500">{rows.length} of {finance.transactions.length} household transactions</p>
           </div>
           <div className="flex min-w-0 flex-1 gap-2 sm:max-w-md">
-            <input type="search" aria-label="Search transactions" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search category, date, amount, member…" className={`${inputClass} min-w-0`} />
-            <select aria-label="Filter transaction type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 text-sm">
+            <input type="search" aria-label="Search transactions" value={filter} onChange={(event) => { setFilter(event.target.value); setTransactionPage(1); }} placeholder="Search category, date, amount, member…" className={`${inputClass} min-w-0`} />
+            <select aria-label="Filter transaction type" value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value); setTransactionPage(1); }} className="rounded-lg border border-slate-300 bg-white px-2 text-sm">
               <option value="all">All types</option>
               <option value="credit">Income & refunds</option>
               <option value="debit">Expense</option>
@@ -1030,7 +1058,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
           </div>
         </div>
         <div className="mt-4 divide-y divide-slate-100">
-          {rows.map((item) => <div key={item.id} className="group -mx-2 flex flex-wrap items-center justify-between gap-3 rounded-xl px-2 py-3 transition-colors hover:bg-slate-50">
+          {visibleTransactions.map((item) => <div key={item.id} className="group -mx-2 flex flex-wrap items-center justify-between gap-3 rounded-xl px-2 py-3 transition-colors hover:bg-slate-50">
             <div className="flex min-w-0 items-center gap-3">
               <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${item.type === "credit" && item.purpose === "income" ? "bg-emerald-50 text-emerald-700" : item.type === "transfer" ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-700"}`}>
                 <WorkspaceIcon section="Transactions" />
@@ -1046,8 +1074,9 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
               <button onClick={() => void onDelete(item.id)} className={secondaryButtonClass}>Delete</button>
             </div>
           </div>)}
-          {!rows.length && <p className="py-4 text-sm text-slate-500">{normalizedFilter ? "No transactions match your search." : "No transactions yet."}</p>}
+          {!rows.length && <p className="py-4 text-sm text-slate-500">{normalizedFilter || typeFilter !== "all" ? "No transactions match your search or filter." : "No transactions yet."}</p>}
         </div>
+        <PaginationControls page={safeTransactionPage} pageCount={transactionPageCount} total={rows.length} pageSize={TRANSACTION_PAGE_SIZE} label="Transactions" onPageChange={setTransactionPage} />
       </section>
     </div>
     {showTransferDialog && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelTransferDialog(); }}>
@@ -1128,11 +1157,16 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
       request.onabort = () => reject(new Error("Upload cancelled."));
       request.onload = () => {
         requestRef.current = null;
+        if (request.status === 413) {
+          reject(new Error("The statement exceeds the 4 MiB file limit. Choose a smaller PDF or CSV file."));
+          return;
+        }
         let payload: Record<string, unknown>;
         try {
           payload = JSON.parse(request.responseText) as Record<string, unknown>;
         } catch {
-          reject(new Error("The server returned an invalid response. Try again."));
+          const status = request.status ? ` (HTTP ${request.status})` : "";
+          reject(new Error(`The import service returned an invalid response${status}. Check the Vercel function logs and confirm its production Firebase Admin environment is configured.`));
           return;
         }
         if (request.status < 200 || request.status >= 300) {
@@ -1302,7 +1336,7 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
               setMappingRequired(false);
               setError("");
             }} className={`${inputClass} mt-1 file:mr-3 file:rounded-md file:border-0 file:bg-teal-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-teal-800`} />
-            <span className="mt-1 block text-xs text-slate-500">PDF or CSV, up to 10 MB. Scanned PDFs are not supported.</span>
+            <span className="mt-1 block text-xs text-slate-500">PDF or CSV, up to 4 MiB. Scanned PDFs are not supported.</span>
           </label>
         </div>
         {file && !mappingRequired && !rows.length && <button type="button" disabled={uploading || committing} onClick={() => void parseSelectedFile()} className={`${buttonClass} mt-4`}>{uploading ? "Uploading and parsing…" : "Review statement"}</button>}
@@ -1650,6 +1684,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   const [manualValueError, setManualValueError] = useState("");
   const [chartMonth, setChartMonth] = useState("");
   const [activeChartMonth, setActiveChartMonth] = useState("");
+  const [investmentActivityPage, setInvestmentActivityPage] = useState(1);
   const manualValueEditorRef = useEditFocus<HTMLElement>(editingManualValue?.id);
 
   useEffect(() => {
@@ -1701,7 +1736,10 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
         ownerUid: transaction.ownerUid,
         amountMinor: transaction.amountMinor,
       })),
-  ].sort((first, second) => second.timestamp - first.timestamp).slice(0, 8);
+  ].sort((first, second) => second.timestamp - first.timestamp);
+  const investmentActivityPageCount = Math.max(1, Math.ceil(recentInvestmentActivity.length / INVESTMENT_ACTIVITY_PAGE_SIZE));
+  const safeInvestmentActivityPage = Math.min(investmentActivityPage, investmentActivityPageCount);
+  const visibleInvestmentActivity = recentInvestmentActivity.slice((safeInvestmentActivityPage - 1) * INVESTMENT_ACTIVITY_PAGE_SIZE, safeInvestmentActivityPage * INVESTMENT_ACTIVITY_PAGE_SIZE);
   const memberUids = [...new Set([...accounts.map((account) => account.ownerUid), ...finance.transactions.filter((item) => item.type === "transfer").map((item) => item.ownerUid)])];
   const monthKeys = chartMonth ? Array.from({ length: 12 }, (_, index) => {
     const [year, month] = chartMonth.split("-").map(Number);
@@ -1869,7 +1907,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
         </div>
       </section>
     </section>
-    <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Recent investment activity</h2><p className="mt-1 text-xs text-slate-500">Includes account additions and balance changes, plus investment contributions and transfers. Account balances are not counted as transactions.</p><div className="mt-3 divide-y divide-slate-100">{recentInvestmentActivity.map((item) => <div key={item.id} className="flex justify-between gap-3 py-3 text-sm"><div><p className="font-medium">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.detail} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><p className="font-semibold text-teal-800">{formatMoney(item.amountMinor, currency)}</p></div>)}{!recentInvestmentActivity.length && <p className="py-3 text-sm text-slate-500">No investment activity recorded yet.</p>}</div></section>
+    <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Recent investment activity</h2><p className="mt-1 text-xs text-slate-500">Includes account additions and balance changes, plus investment contributions and transfers. Account balances are not counted as transactions.</p><div className="mt-3 divide-y divide-slate-100">{visibleInvestmentActivity.map((item) => <div key={item.id} className="flex justify-between gap-3 py-3 text-sm"><div><p className="font-medium">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.detail} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><p className="font-semibold text-teal-800">{formatMoney(item.amountMinor, currency)}</p></div>)}{!recentInvestmentActivity.length && <p className="py-3 text-sm text-slate-500">No investment activity recorded yet.</p>}</div><PaginationControls page={safeInvestmentActivityPage} pageCount={investmentActivityPageCount} total={recentInvestmentActivity.length} pageSize={INVESTMENT_ACTIVITY_PAGE_SIZE} label="Investment activity" onPageChange={setInvestmentActivityPage} /></section>
     <section className="rounded-2xl border border-slate-200 bg-white p-5">
       <h2 className="font-bold">Add a monthly snapshot</h2>
       <p className="mt-1 text-xs text-slate-500">Historical snapshots are saved at the bottom of this page and preserve existing monthly records.</p>

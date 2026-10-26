@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   reactCompiler: true,
+  serverExternalPackages: ["jwks-rsa"],
 };
 
 export default nextConfig;

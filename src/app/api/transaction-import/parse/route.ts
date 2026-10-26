@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   try {
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > MAX_STATEMENT_BYTES + 64 * 1024) {
-      throw new ImportApiError("The statement exceeds the 10 MB file limit.", 413);
+      throw new ImportApiError("The statement exceeds the 4 MiB file limit.", 413);
     }
     const householdId = request.headers.get("x-household-id");
     if (!householdId) throw new ImportApiError("Choose a household before importing.", 400);
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     const file = form.get("file");
     if (!(file instanceof File)) throw new ImportApiError("Choose a PDF or CSV statement.", 400);
     if (file.size === 0) throw new ImportApiError("The selected statement is empty.", 400);
-    if (file.size > MAX_STATEMENT_BYTES) throw new ImportApiError("The statement exceeds the 10 MB file limit.", 413);
+    if (file.size > MAX_STATEMENT_BYTES) throw new ImportApiError("The statement exceeds the 4 MiB file limit.", 413);
     if (!["USD", "CAD", "EUR", "GBP", "INR", "SAR", "KWD"].includes(context.currency)) {
       throw new ImportApiError("The household has an unsupported currency.", 400);
     }

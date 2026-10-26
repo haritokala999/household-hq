@@ -22,7 +22,7 @@ The app uses local system font stacks so production builds do not depend on fetc
 
 ## Statement imports
 
-The transaction importer parses CSV files and text-based Capital One PDF statements in memory. Imported transactions are associated with the signed-in household member and are not linked to a financial account. It requires the existing `NEXT_PUBLIC_FIREBASE_PROJECT_ID` setting and server-side Firebase Admin credentials: either Application Default Credentials in the Node.js runtime or a protected `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable. Never expose the service-account value to the browser or commit it. The application server must run in a Node.js environment; `firebase.json` configures Firestore rules and the local emulator, not Next.js API hosting.
+The transaction importer parses CSV files and text-based Capital One PDF statements in memory, up to 4 MiB per file. Imported transactions are associated with the signed-in household member and are not linked to a financial account. It requires the existing `NEXT_PUBLIC_FIREBASE_PROJECT_ID` setting and server-side Firebase Admin credentials: either Application Default Credentials in the Node.js runtime or a protected `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable. On Vercel, configure these values in the Production environment and redeploy; never expose the service-account value to the browser or commit it. The application server must run in a Node.js environment; `firebase.json` configures Firestore rules and the local emulator, not Next.js API hosting.
 
 ## Learn More
 
