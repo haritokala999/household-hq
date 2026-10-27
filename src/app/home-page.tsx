@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -881,7 +882,7 @@ function NetWorthDetailsDialog({ finance, currency, memberNames, origin, onClose
   const originX = origin.left + origin.width / 2 - target.viewportWidth / 2;
   const originY = origin.top + origin.height / 2 - target.viewportHeight / 2;
   const flipTransform = flipped ? "translate(-50%, -50%) scale(1) rotateY(180deg)" : `translate(calc(-50% + ${originX}px), calc(-50% + ${originY}px)) scale(${origin.width / target.width}, ${origin.height / target.height}) rotateY(0deg)`;
-  return <div role="presentation" className="net-worth-flip-overlay fixed inset-0 z-[70] bg-slate-950/55 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+  return createPortal(<div role="presentation" className="net-worth-flip-overlay fixed inset-0 z-[70] bg-slate-950/55 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
     <div className="net-worth-flip-shell" style={{ width: target.width, height: target.height, transform: flipTransform }} onTransitionEnd={(event) => { if (event.target === event.currentTarget && closing && !flipped) onCloseRef.current(); }}>
     <div aria-hidden="true" className="net-worth-flip-front"><span className="text-sm font-semibold text-slate-600">Net Worth</span><span className="text-2xl font-bold text-slate-900">{formatMoney(netWorth, currency)}</span></div>
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="net-worth-dialog-title" aria-describedby="net-worth-dialog-description" tabIndex={-1} className="net-worth-flip-back overflow-hidden rounded-3xl border border-white/70 bg-white shadow-2xl outline-none">
@@ -905,7 +906,7 @@ function NetWorthDetailsDialog({ finance, currency, memberNames, origin, onClose
       </div>
     </section>
     </div>
-  </div>;
+  </div>, document.body);
 }
 
 function percentChangeLabel(current: number, previous: number, period: string) {
@@ -970,24 +971,29 @@ function CashFlowLineChart({ transactions, anchorMonth, currency, chartType = "l
   const resolvedAnchorMonth = resolveCashFlowAnchorMonth(anchorMonth, transactions);
   const monthly = buildCashFlowMonths(transactions, resolvedAnchorMonth, chartRangeMonthCount(range, resolvedAnchorMonth));
   const left = 42;
-  const right = 700;
+  const right = 690;
   const top = 18;
   const bottom = 174;
+  const barWidth = Math.min(14, Math.max(6, (right - left) / monthly.length * 0.16));
+  const barGap = Math.max(2, barWidth * 0.18);
+  const chartIntervals = Math.max(monthly.length - 1, 1);
+  const monthSpacing = (right - left) / (chartIntervals + 0.84);
+  const highlightInset = monthSpacing * 0.42;
+  const barGroupInset = barWidth * 1.5 + barGap;
+  const pointInset = monthly.length < 2 ? 0 : Math.max(highlightInset, chartType === "bar" ? barGroupInset : 6);
   const minValue = Math.min(0, ...monthly.flatMap((item) => [item.income, item.expenses, item.income - item.expenses]));
   const maxValue = Math.max(1, ...monthly.flatMap((item) => [item.income, item.expenses, item.income - item.expenses]));
-  const x = (index: number) => monthly.length < 2 ? (left + right) / 2 : left + index * (right - left) / (monthly.length - 1);
+  const x = (index: number) => monthly.length < 2 ? (left + right) / 2 : left + pointInset + index * (right - left - pointInset * 2) / (monthly.length - 1);
   const y = (value: number) => top + (maxValue - value) / (maxValue - minValue) * (bottom - top);
   const valueFor = (item: CashFlowMonth, key: "income" | "expenses" | "saved") => key === "saved" ? item.income - item.expenses : item[key];
   const line = (key: "income" | "expenses" | "saved") => monthly.map((item, index) => `${x(index)},${y(valueFor(item, key))}`).join(" ");
-  const barWidth = Math.min(14, Math.max(6, (right - left) / monthly.length * 0.16));
-  const barGap = Math.max(2, barWidth * 0.18);
   const series = [
     { key: "income", color: "#0f9f78" },
     { key: "expenses", color: "#4388e8" },
     { key: "saved", color: "#8b5cf6" },
   ] as const;
 
-  return <div className="mt-4 min-w-0">
+  return <div className="cash-flow-chart mt-4 min-w-0">
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-medium text-slate-500">View period</p><ChartRangeControls value={range} onChange={setRange} label="Cash flow chart range" /></div>
     <svg viewBox="0 0 720 220" role="group" aria-label={`Monthly income, spending, and saved amount ${chartType} chart`} aria-describedby="cash-flow-chart-detail" className="h-auto w-full overflow-visible">
       {[0, 1, 2, 3].map((tick) => {
@@ -1017,7 +1023,7 @@ function CashFlowLineChart({ transactions, anchorMonth, currency, chartType = "l
         {chartType === "line" && <><circle cx={x(index)} cy={y(item.income)} r={activeIndex === index ? 6 : 4} fill="#0f9f78" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /><circle cx={x(index)} cy={y(item.expenses)} r={activeIndex === index ? 6 : 4} fill="#4388e8" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /><circle cx={x(index)} cy={y(item.income - item.expenses)} r={activeIndex === index ? 6 : 4} fill="#8b5cf6" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /></>}
         <text x={x(index)} y="198" textAnchor="middle" className={`transition-colors duration-200 ${activeIndex === index ? "fill-teal-800 font-semibold" : "fill-slate-500"}`} fontSize="10">{item.month}</text>
       </g>)}
-    </svg>{activeIndex === null ? <p id="cash-flow-chart-detail" className="min-h-5 text-xs text-slate-400">Hover or focus a month to see its income, spending, and category breakdown. Select a month to keep it open.</p> : <div id="cash-flow-chart-detail" aria-live="polite" className="grid gap-4 rounded-xl border border-teal-100 bg-teal-50/70 p-4 lg:grid-cols-[0.8fr_1.2fr]"><div><p className="text-sm font-semibold text-slate-800">{monthly[activeIndex].month} {monthly[activeIndex].year} breakdown</p><p className="mt-1 text-xs text-slate-600">Household totals for this month</p><div className="mt-3 space-y-2 text-sm">{(["income", "expenses", "saved"] as const).map((key) => <p key={key} className="flex items-center gap-2"><i aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${key === "income" ? "bg-emerald-600" : key === "expenses" ? "bg-blue-500" : "bg-violet-500"}`} /><span className="text-slate-700">{key === "income" ? "Income" : key === "expenses" ? "Expenses" : "Saved"}</span><strong className="ml-auto text-slate-900">{formatMoney(key === "income" ? monthly[activeIndex].income : key === "expenses" ? monthly[activeIndex].expenses : monthly[activeIndex].income - monthly[activeIndex].expenses, currency)}</strong></p>)}</div></div><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spending by category <span className="font-normal normal-case tracking-normal">· net of refunds</span></p>{monthly[activeIndex].categoryTotals.length ? <ul className="mt-2 grid gap-x-4 sm:grid-cols-2">{monthly[activeIndex].categoryTotals.map(([category, amount], index) => <li key={category} className="flex min-w-0 items-center justify-between gap-2 border-t border-teal-100/80 py-2 text-sm"><span className="flex min-w-0 items-center gap-2"><i aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"][index % 6] }} /><span className="truncate text-slate-700">{category === "MISC" ? "Miscellaneous" : category}</span></span><strong className="shrink-0 text-slate-900">{formatMoney(amount, currency)}</strong></li>)}</ul> : <p className="mt-2 rounded-lg bg-white/70 p-3 text-xs text-slate-500">No expenses for this month.</p>}</div></div>}
+    </svg>{activeIndex === null ? <p id="cash-flow-chart-detail" className="min-h-5 text-xs text-slate-400">Hover or focus a month to see its income, spending, and category breakdown. Select a month to keep it open.</p> : <div id="cash-flow-chart-detail" aria-live="polite" className="cash-flow-chart-detail grid gap-4 rounded-xl border border-teal-100 bg-teal-50/70 p-4 lg:grid-cols-[0.8fr_1.2fr]"><div><p className="text-sm font-semibold text-slate-800">{monthly[activeIndex].month} {monthly[activeIndex].year} breakdown</p><p className="mt-1 text-xs text-slate-600">Household totals for this month</p><div className="mt-3 space-y-2 text-sm">{(["income", "expenses", "saved"] as const).map((key) => <p key={key} className="flex items-center gap-2"><i aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${key === "income" ? "bg-emerald-600" : key === "expenses" ? "bg-blue-500" : "bg-violet-500"}`} /><span className="text-slate-700">{key === "income" ? "Income" : key === "expenses" ? "Expenses" : "Saved"}</span><strong className="ml-auto text-slate-900">{formatMoney(key === "income" ? monthly[activeIndex].income : key === "expenses" ? monthly[activeIndex].expenses : monthly[activeIndex].income - monthly[activeIndex].expenses, currency)}</strong></p>)}</div></div><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spending by category <span className="font-normal normal-case tracking-normal">· net of refunds</span></p>{monthly[activeIndex].categoryTotals.length ? <ul className="mt-2 grid gap-x-4 sm:grid-cols-2">{monthly[activeIndex].categoryTotals.map(([category, amount], index) => <li key={category} className="flex min-w-0 items-center justify-between gap-2 border-t border-teal-100/80 py-2 text-sm"><span className="flex min-w-0 items-center gap-2"><i aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"][index % 6] }} /><span className="truncate text-slate-700">{category === "MISC" ? "Miscellaneous" : category}</span></span><strong className="shrink-0 text-slate-900">{formatMoney(amount, currency)}</strong></li>)}</ul> : <p className="mt-2 rounded-lg bg-white/70 p-3 text-xs text-slate-500">No expenses for this month.</p>}</div></div>}
   </div>;
 }
 
@@ -2362,14 +2368,14 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     points: monthlyPoints.flatMap((point, index) => {
       const amount = point[series.kind];
       if (amount === null) return [];
-      return [{ month: point.month, amount, x: 64 + (index / Math.max(monthlyPoints.length - 1, 1)) * 636, y: 150 - (amount / maxChartValue) * 120 }];
+      return [{ month: point.month, amount, x: 84 + (index / Math.max(monthlyPoints.length - 1, 1)) * 598, y: 150 - (amount / maxChartValue) * 120 }];
     }),
   }));
   const selectedChartPoint = monthlyPoints.find((point) => point.month === activeChartMonth);
   const selectedChartTotal = selectedChartPoint
     ? [selectedChartPoint.brokerage, selectedChartPoint.retirement, selectedChartPoint.savings].reduce<number>((sum, amount) => sum + (amount ?? 0), 0)
     : 0;
-  const investmentBarWidth = Math.min(16, 636 / Math.max(monthKeys.length, 1) * 0.2);
+  const investmentBarWidth = Math.min(16, 598 / Math.max(monthKeys.length, 1) * 0.2);
   const chartMonthLabel = (monthKey: string, format: "short" | "long" = "short") => {
     const [year, month] = monthKey.split("-").map(Number);
     return new Date(year, month - 1, 1).toLocaleString(undefined, { month: format, ...(format === "long" ? { year: "numeric" } : {}) });
@@ -2466,7 +2472,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
             return <g key={step}><line x1="58" y1={y} x2="708" y2={y} stroke="#e2e8f0" strokeWidth="1" /><text x="52" y={y - 4} textAnchor="end" fontSize="10" fill="#64748b">{formatMoney(value, currency)}</text></g>;
           })}
           {monthKeys.map((monthKey, index) => {
-            const x = 64 + (index / Math.max(monthKeys.length - 1, 1)) * 636;
+            const x = 84 + (index / Math.max(monthKeys.length - 1, 1)) * 598;
             const point = monthlyPoints[index];
             const val = (amount: number | null) => amount === null ? "no snapshot" : formatMoney(amount, currency);
             const description = `${monthKey}. Brokerage ${val(point.brokerage)}; 401(k) ${val(point.retirement)}; Cash ${val(point.savings)}.`;
@@ -2479,7 +2485,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
               return <rect key={point.month} x={point.x + offset - investmentBarWidth / 2} y={point.y} width={investmentBarWidth} height={Math.max(1, 150 - point.y)} rx="2.5" fill={series.color} opacity={active ? 1 : 0.82} stroke={active ? "white" : "none"} strokeWidth={active ? 1 : 0} className="transition-all duration-200 motion-reduce:transition-none"><title>{series.label}, {point.month}: {formatMoney(point.amount, currency)}</title></rect>;
             })}
           </g>)}
-          {monthKeys.map((monthKey, index) => <text key={monthKey} x={64 + (index / Math.max(monthKeys.length - 1, 1)) * 636} y="174" textAnchor="middle" fontSize="10" fill="#64748b">{chartMonthLabel(monthKey)}</text>)}
+          {monthKeys.map((monthKey, index) => <text key={monthKey} x={84 + (index / Math.max(monthKeys.length - 1, 1)) * 598} y="174" textAnchor="middle" fontSize="10" fill="#64748b">{chartMonthLabel(monthKey)}</text>)}
         </svg>
       </div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-500">Loading monthly history…</p>}
       {selectedChartPoint && <div id="investment-chart-detail" aria-live="polite" className="mt-4 grid gap-3 rounded-xl border border-teal-100 bg-teal-50/70 p-4 sm:grid-cols-[1fr_auto] sm:items-center"><div><p className="text-sm font-semibold text-slate-800">{chartMonthLabel(selectedChartPoint.month, "long")} breakdown</p><p className="mt-1 text-xs text-slate-600">Manual balances; no market pricing. “—” means that group has no saved snapshot.</p></div><div className="grid grid-cols-2 gap-x-5 gap-y-2 text-sm sm:grid-cols-4">{chartSeries.map((series) => <p key={series.kind} className="flex items-center gap-2"><i aria-hidden="true" className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: series.color }} /><span className="text-slate-700">{series.label}</span><strong className="ml-auto text-slate-900">{selectedChartPoint[series.kind] === null ? "—" : formatMoney(selectedChartPoint[series.kind]!, currency)}</strong></p>)}<p className="col-span-2 flex justify-between border-t border-teal-100 pt-2 text-sm font-semibold text-slate-800 sm:col-span-4"><span>Recorded snapshot total</span><span>{formatMoney(selectedChartTotal, currency)}</span></p></div></div>}

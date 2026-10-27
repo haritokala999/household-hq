@@ -35,7 +35,6 @@ body {
 
 .workspace-page-enter {
   animation: workspace-page-enter 280ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
-  will-change: opacity, transform;
 }
 
 .workspace-page-enter-left { --workspace-enter-x: 22px; }
@@ -65,7 +64,7 @@ body {
 
 @keyframes workspace-page-enter {
   from { opacity: 0; transform: translateX(var(--workspace-enter-x, 0)); }
-  to { opacity: 1; transform: translateX(0); }
+  to { opacity: 1; transform: none; }
 }
 
 button,
@@ -109,7 +108,7 @@ textarea:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-page-enter { animation: none; will-change: auto; }
+  .workspace-page-enter { animation: none; }
   .motion-pop-in,
   .motion-panel-in,
   .motion-dialog-backdrop,
@@ -160,9 +159,11 @@ textarea:focus-visible {
 .app-dark .hover\:bg-slate-50:hover { background-color: #273449 !important; }
 .app-dark [class~="bg-white/95"],
 .app-dark [class~="bg-white/90"],
+.app-dark [class~="bg-white/70"],
 .app-dark [class~="bg-white/80"] { background-color: rgb(31 41 55 / 96%) !important; }
 .app-dark [class~="bg-slate-50/80"],
 .app-dark [class~="bg-slate-50/70"],
+.app-dark [class~="bg-slate-50/60"],
 .app-dark [class~="bg-slate-50/50"] { background-color: #1f2937 !important; }
 .app-dark [class*="bg-emerald-50"],
 .app-dark [class*="bg-emerald-100"],
@@ -227,6 +228,17 @@ textarea:focus-visible {
 .app-dark .investment-chart-container svg text { fill: #cbd5e1 !important; }
 .app-dark #investment-chart-detail { border-color: #3c4a5e; background-color: #273449; }
 .app-dark #investment-chart-detail .border-teal-100 { border-color: #3c4a5e; }
+.app-dark .cash-flow-chart > svg line[stroke="#e2e8f0"] { stroke: #64748b; }
+.app-dark .cash-flow-chart > svg text { fill: #cbd5e1 !important; }
+.app-dark .cash-flow-chart > svg rect[fill="#ccfbf1"] { fill: #134e4a !important; }
+.app-dark .cash-flow-chart > svg [stroke="#0f9f78"] { stroke: #34d399; }
+.app-dark .cash-flow-chart > svg [stroke="#4388e8"] { stroke: #60a5fa; }
+.app-dark .cash-flow-chart > svg [stroke="#8b5cf6"] { stroke: #c4b5fd; }
+.app-dark .cash-flow-chart > svg [fill="#0f9f78"] { fill: #34d399; }
+.app-dark .cash-flow-chart > svg [fill="#4388e8"] { fill: #60a5fa; }
+.app-dark .cash-flow-chart > svg [fill="#8b5cf6"] { fill: #c4b5fd; }
+.app-dark .cash-flow-chart-detail { border-color: #3c4a5e; background-color: #273449; }
+.app-dark .cash-flow-chart-detail li { border-color: #3c4a5e; }
 
 .glass-nav {
   border: 1px solid rgb(255 255 255 / 70%);
