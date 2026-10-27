@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ConfirmationDialog, EntityActions } from "@/components/entity-actions";
 import { doc, getDoc } from "firebase/firestore";
 import { loadHouseholdActivity, markHouseholdActivitySeen, recordHouseholdActivity } from "@/lib/activity";
 import AuthGuard from "@/components/auth-guard";
@@ -75,6 +76,7 @@ type AppNotification = {
 };
 type CelebrationKind = "goal" | "budget" | "income" | "transfer";
 type Celebration = { id: number; kind: CelebrationKind };
+type DeleteRequest = { recordLabel: string; description: string; onConfirm: () => Promise<void> };
 const workspaceSections: Section[] = ["Dashboard", "Transactions", "Budgets", "Goals", "Investments"];
 const currencyFlags: Record<HouseholdCurrency, string> = {
   USD: "🇺🇸",
@@ -149,6 +151,10 @@ export default function Home() {
   const [transferringOwnership, setTransferringOwnership] = useState(false);
   const [promotingMember, setPromotingMember] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [deleteRequest, setDeleteRequest] = useState<DeleteRequest>();
+  const [deleting, setDeleting] = useState(false);
+  const deleteLock = useRef(false);
+  const [editingAccount, setEditingAccount] = useState<FinancialAccount>();
 
   useEffect(() => {
     if (!showProfileMenu) return;
@@ -197,6 +203,27 @@ export default function Home() {
     setNotifications((current) => [notification, ...current].slice(0, 20));
     setUnreadNotifications((current) => current + 1);
   }, []);
+
+  function requestDelete(request: DeleteRequest) {
+    if (deleteLock.current) return;
+    setDeleteRequest(request);
+  }
+
+  async function confirmDelete() {
+    if (!deleteRequest || deleteLock.current) return;
+    deleteLock.current = true;
+    setDeleting(true);
+    try {
+      await deleteRequest.onConfirm();
+      setDeleteRequest(undefined);
+    } catch {
+      // The mutation handler displays the error; keep the dialog open so the user
+      // can retry or cancel without removing the still-persisted record.
+    } finally {
+      deleteLock.current = false;
+      setDeleting(false);
+    }
+  }
 
   const recordActivityForHousehold = useCallback(async (targetHouseholdId: string, summary: string) => {
     if (!uid) return;
@@ -616,21 +643,21 @@ export default function Home() {
             {financeError && <ErrorPanel message={financeError} onRetry={refresh} />}
             {loadingFinance ? <LoadingPanel label="Loading household records…" /> : (
               <>
-                {section === "Dashboard" && <Dashboard finance={finance} month={month} setMonth={setMonth} currency={currency} memberNames={memberNames} onOpen={setSection} onAddPayment={(input) => runAction(
+                {section === "Dashboard" && <Dashboard finance={finance} month={month} setMonth={setMonth} currency={currency} memberNames={memberNames} onOpen={setSection} onRequestDelete={requestDelete} onAddPayment={(input) => runAction(
                   () => saveRecurringPayment(db, householdId!, uid!, input),
                   input.frequency === "once" ? "One-time payment added." : "Recurring payment added.",
                   undefined,
                   undefined,
                   true,
-                )} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.")} />}
-                {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} householdId={householdId!} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.")} onImportComplete={refresh} editing={editingTransaction} setEditing={setEditingTransaction} />}
-                {section === "Budgets" && <BudgetsSection finance={finance} currency={currency} month={month} setMonth={setMonth} onSave={(input, existing) => runAction(() => saveBudget(db, householdId!, uid!, input, existing), "Budget saved.", undefined, existing ? undefined : "budget")} onCopyPrevious={(sourceMonth, targetMonth) => runAction(() => copyPreviousMonthBudgets(db, householdId!, uid!, sourceMonth, targetMonth, finance.budgets), "Previous month’s budgets copied into the selected month.")} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "budgets", id), "Budget deleted.")} editing={editingBudget} setEditing={setEditingBudget} />}
-                {section === "Goals" && <GoalsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} onSave={(input, existing) => runAction(() => saveGoal(db, householdId!, uid!, input, existing), "Goal saved.", undefined, !existing && input.currentMinor >= input.targetMinor ? "goal" : undefined)} onAddProgress={(goalId, amountMinor, onSuccess) => {
+                )} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.", undefined, undefined, true)} />}
+                {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} householdId={householdId!} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined, true)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} onImportComplete={refresh} editing={editingTransaction} setEditing={setEditingTransaction} />}
+                {section === "Budgets" && <BudgetsSection finance={finance} currency={currency} month={month} setMonth={setMonth} onSave={(input, existing) => runAction(() => saveBudget(db, householdId!, uid!, input, existing), "Budget saved.", undefined, existing ? undefined : "budget", true)} onCopyPrevious={(sourceMonth, targetMonth) => runAction(() => copyPreviousMonthBudgets(db, householdId!, uid!, sourceMonth, targetMonth, finance.budgets), "Previous month’s budgets copied into the selected month.", undefined, undefined, true)} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "budgets", id), "Budget deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} editing={editingBudget} setEditing={setEditingBudget} />}
+                {section === "Goals" && <GoalsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} onSave={(input, existing) => runAction(() => saveGoal(db, householdId!, uid!, input, existing), "Goal saved.", undefined, !existing && input.currentMinor >= input.targetMinor ? "goal" : undefined, true)} onAddProgress={(goalId, amountMinor, onSuccess) => {
                   const goal = finance.goals.find((item) => item.id === goalId);
                   const completesGoal = Boolean(goal && goal.currentMinor < goal.targetMinor && goal.currentMinor + amountMinor >= goal.targetMinor);
-                  return runAction(() => addGoalProgress(db, householdId!, goalId, amountMinor), completesGoal ? "Goal achieved — congratulations!" : "Goal progress updated.", onSuccess, completesGoal ? "goal" : undefined);
-                }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.")} editing={editingGoal} setEditing={setEditingGoal} />}
-                {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} darkMode={darkMode} snapshots={snapshotHistory} onSaveAccount={(input) => runAction(async () => { const accountId = await saveAccount(db, householdId!, uid!, currency, input); const thisMonth = currentMonthKey(); if (!(snapshotHistory[accountId] ?? []).some((snapshot) => snapshot.month === thisMonth)) await addAccountSnapshot(db, householdId!, accountId, uid!, thisMonth, input.balanceMinor); }, "Account added.")} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.")} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.")} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`)} />}
+                  return runAction(() => addGoalProgress(db, householdId!, goalId, amountMinor), completesGoal ? "Goal achieved — congratulations!" : "Goal progress updated.", onSuccess, completesGoal ? "goal" : undefined, true);
+                }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} editing={editingGoal} setEditing={setEditingGoal} />}
+                {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} darkMode={darkMode} snapshots={snapshotHistory} editingAccount={editingAccount} setEditingAccount={setEditingAccount} onEditTransaction={(transaction) => { setEditingTransaction(transaction); setSection("Transactions"); }} onDeleteTransaction={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} onSaveAccount={(input, existing) => runAction(() => saveAccount(db, householdId!, uid!, currency, input, existing, existing ? undefined : currentMonthKey()), existing ? "Account updated." : "Account added.", () => setEditingAccount(undefined), undefined, true)} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.", () => setEditingAccount(undefined), undefined, true)} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.", undefined, undefined, true)} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`, undefined, undefined, true)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`, undefined, undefined, true)} />}
                 {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} defaultHouseholdId={defaultHouseholdId} onSelectHousehold={selectHousehold} onSetDefaultHousehold={setDefaultHousehold} onRenameHousehold={handleRenameHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
               </>
             )}
@@ -638,6 +665,7 @@ export default function Home() {
           </div>
         </section>
         {toast && <div key={toast.id} role={toast.type === "error" ? "alert" : "status"} aria-live={toast.type === "error" ? "assertive" : "polite"} className={`notification-toast fixed right-4 top-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] items-start gap-3 rounded-xl border p-4 shadow-xl ${toast.type === "error" ? "border-red-200 bg-white text-red-900" : "border-emerald-200 bg-white text-emerald-900"}`}><span aria-hidden="true" className={`mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${toast.type === "error" ? "bg-red-600" : "bg-emerald-600"}`}>{toast.type === "error" ? "!" : "✓"}</span><p className="flex-1 text-sm font-medium">{toast.message}</p><button type="button" onClick={() => setToast(undefined)} aria-label="Dismiss notification" className="rounded-md px-1 text-lg leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">×</button></div>}
+        {deleteRequest && <ConfirmationDialog title={`Delete ${deleteRequest.recordLabel}?`} description={deleteRequest.description} isPending={deleting} onCancel={() => setDeleteRequest(undefined)} onConfirm={() => void confirmDelete()} />}
         {celebration && <CelebrationEffect key={celebration.id} kind={celebration.kind} />}
       </main>
     </AuthGuard>
@@ -731,8 +759,8 @@ function MetricCard({ title, value, detail, accent = "emerald", note, icon, extr
   return <article className="group flex h-full min-h-[190px] flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md motion-reduce:transition-none"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium text-slate-500">{title}</p><p className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{value}</p></div><span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none ${colors[accent] ?? colors.emerald}`}><MetricIcon name={icon} /></span></div><p className={`mt-3 inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${colors[accent] ?? colors.emerald}`}>{detail}</p>{note && <p className="mt-2 text-xs leading-5 text-slate-500">{note}</p>}{extra && <div className="mt-auto pt-3">{extra}</div>}</article>;
 }
 
-function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, onAddPayment, onDeletePayment }: {
-  finance: HouseholdFinanceData; month: string; setMonth: (month: string) => void; currency: string; memberNames: Map<string, string>; onOpen: (section: Section) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey">) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
+function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, onRequestDelete, onAddPayment, onDeletePayment }: {
+  finance: HouseholdFinanceData; month: string; setMonth: (month: string) => void; currency: string; memberNames: Map<string, string>; onOpen: (section: Section) => void; onRequestDelete: (request: DeleteRequest) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey">) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
 }) {
   const financialSummary = calculateFinanceSummary(finance, month || "1970-01");
   const [paymentName, setPaymentName] = useState("");
@@ -815,7 +843,7 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
       <section className="rounded-2xl border border-slate-200 bg-white p-5 md:col-span-2 xl:col-span-2 xl:col-start-5 xl:row-span-2 xl:row-start-1">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">Upcoming payments</h2><p className="mt-1 text-sm text-slate-500">Monthly bills and recurring payments</p></div><div className="ml-auto flex items-center gap-3"><span className="text-sm font-medium text-slate-600">{new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}</span><button type="button" onClick={() => { setShowPaymentForm((current) => !current); setPaymentError(""); }} aria-label={showPaymentForm ? "Close recurring payment form" : "Add recurring payment"} aria-expanded={showPaymentForm} className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-teal-700 text-white shadow-sm transition-all duration-200 hover:scale-110 hover:bg-teal-800 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 active:scale-95" title={showPaymentForm ? "Close recurring payment form" : "Add recurring payment"}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className={`h-5 w-5 transition-transform duration-200 ${showPaymentForm ? "rotate-45" : ""}`}><path d="M12 5v14M5 12h14" /></svg></button></div></div>
         <div className="mt-4 grid grid-cols-7 gap-1 text-center text-xs">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`} className="py-1 font-semibold text-slate-400">{day}</span>)}{Array.from({ length: firstWeekday }, (_, index) => <span key={`empty-${index}`} />)}{Array.from({ length: daysInMonth }, (_, index) => { const day = index + 1; const dueToday = paymentDates.some((payment) => payment.day === day); return <span key={day} className={`relative rounded-lg py-1.5 ${dueToday ? "bg-emerald-50 font-semibold text-emerald-800" : "text-slate-600"}`}>{day}{dueToday && <i className="absolute bottom-0.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-emerald-600" />}</span>; })}</div>
-        <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">{paymentDates.map((payment) => <div key={payment.id} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-medium">{payment.name}</p><p className="text-xs text-slate-500">Due {new Date(year, monthNumber - 1, payment.day).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {(payment.frequency ?? "monthly") === "monthly" ? "repeats monthly" : "one-time"}</p></div><div className="flex shrink-0 items-center gap-2"><span className="font-semibold">{formatMoney(payment.amountMinor, currency)}</span><button type="button" onClick={() => void onDeletePayment(payment.id)} aria-label={`Remove ${payment.name}`} className="text-slate-400 hover:text-red-700">×</button></div></div>)}{!paymentDates.length && <p className="text-sm text-slate-500">No payments due this month yet.</p>}</div>
+        <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">{paymentDates.map((payment) => <div key={payment.id} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-medium">{payment.name}</p><p className="text-xs text-slate-500">Due {new Date(year, monthNumber - 1, payment.day).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {(payment.frequency ?? "monthly") === "monthly" ? "repeats monthly" : "one-time"}</p></div><div className="flex shrink-0 items-center gap-2"><span className="font-semibold">{formatMoney(payment.amountMinor, currency)}</span><EntityActions onDelete={() => onRequestDelete({ recordLabel: payment.name, description: "This will remove the payment from your household calendar.", onConfirm: () => onDeletePayment(payment.id) })} deleteLabel="Remove" /></div></div>)}{!paymentDates.length && <p className="text-sm text-slate-500">No payments due this month yet.</p>}</div>
         {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-2"><input autoFocus required maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment" aria-label="Bill or payment name" className={inputClass} /><input required inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} />        <select value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value === "once" ? "once" : "monthly")} aria-label="Payment frequency" className={inputClass}><option value="monthly">Repeats every month</option><option value="once">Only this month</option></select><input required type="number" min="1" max="31" value={paymentDueDay} onChange={(event) => setPaymentDueDay(event.target.value)} aria-label="Due day of month" title="Due day of month" className={inputClass} /><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Add payment"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2">{paymentError}</p>}</form>}
       </section>
     </div>
@@ -857,7 +885,7 @@ function PaginationControls({ page, pageCount, total, pageSize, label, onPageCha
   </nav>;
 }
 
-function TransactionsSection({ finance, currency, householdId, uid, memberNames, filter, setFilter, typeFilter, setTypeFilter, onSave, onDelete, onImportComplete, editing, setEditing }: {
+function TransactionsSection({ finance, currency, householdId, uid, memberNames, filter, setFilter, typeFilter, setTypeFilter, onSave, onDelete, onRequestDelete, onImportComplete, editing, setEditing }: {
   finance: HouseholdFinanceData;
   currency: HouseholdCurrency;
   householdId: string;
@@ -869,6 +897,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
   setTypeFilter: (value: string) => void;
   onSave: (input: Pick<FinancialTransaction, "type" | "purpose" | "transferDestination" | "category" | "description" | "amountMinor" | "date" | "accountId" | "sourceAccountId" | "ownerUid">, existing?: FinancialTransaction) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onRequestDelete: (request: DeleteRequest) => void;
   onImportComplete: () => Promise<void>;
   editing?: FinancialTransaction;
   setEditing: (transaction?: FinancialTransaction) => void;
@@ -876,6 +905,8 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
   const [showImport, setShowImport] = useState(false);
   const [showEditor, setShowEditor] = useState(Boolean(editing));
   const [transactionPage, setTransactionPage] = useState(1);
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [saving, setSaving] = useState(false);
   const [type, setType] = useState<FinancialTransaction["type"]>("debit");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
@@ -883,6 +914,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [accountId, setAccountId] = useState("");
+  const [showLinkedAccount, setShowLinkedAccount] = useState(false);
   const [transferDestination, setTransferDestination] = useState<FinancialTransaction["transferDestination"]>(null);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const [error, setError] = useState("");
@@ -903,12 +935,15 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
     setAmount(moneyInputValue(editing?.amountMinor, currency));
     setDate(editing?.date ?? new Date().toISOString().slice(0, 10));
     setAccountId(editing?.accountId ?? "");
+    setShowLinkedAccount(Boolean(editing?.accountId));
     setTransferDestination(editing?.transferDestination ?? null);
     setShowTransferDialog(false);
   }, [editing, currency]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving) return;
+    setSaving(true);
     setError("");
     try {
       await onSave({
@@ -935,15 +970,20 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
       setShowDescription(false);
       setAmount("");
       setAccountId("");
+      setShowLinkedAccount(false);
       setShowEditor(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save transaction.");
+    } finally {
+      setSaving(false);
     }
   }
 
   const normalizedFilter = filter.trim().toLowerCase();
+  const transactionCategories = [...new Set(finance.transactions.map((item) => item.category))].sort((a, b) => a.localeCompare(b));
   const rows = finance.transactions
     .filter((item) => typeFilter === "all" || item.type === typeFilter)
+    .filter((item) => categoryFilter === "all" || item.category === categoryFilter)
     .filter((item) => {
       if (!normalizedFilter) return true;
       const owner = memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member");
@@ -1025,18 +1065,26 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             <label className="block text-sm font-medium">Add to investment account
               <select required value={accountId} onChange={(event) => setAccountId(event.target.value)} className={`${inputClass} mt-1`}>
                 <option value="">Choose a destination account</option>
-                {finance.accounts.filter((item) => !item.archived && item.kind === (transferDestination === "brokerage" ? "brokerage" : transferDestination === "retirement" ? "retirement" : transferDestination === "cash" ? "savings" : "")).map((item) => <option key={item.id} value={item.id}>{item.name} · current balance {formatMoney(item.balanceMinor, currency)}</option>)}
+                {finance.accounts.filter((item) => !item.archived && item.kind === (transferDestination === "brokerage" ? "brokerage" : transferDestination === "retirement" ? "retirement" : transferDestination === "cash" ? "savings" : "")).map((item) => <option key={item.id} value={item.id}>{memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · {item.name} · current balance {formatMoney(item.balanceMinor, currency)}</option>)}
               </select>
             </label>
-          </div> : <label className="block text-sm font-medium">Linked account (optional)
-            <select value={accountId} onChange={(event) => setAccountId(event.target.value)} className={`${inputClass} mt-1`}>
-              <option value="">No linked account</option>
-              {finance.accounts.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>}
+          </div> : <div>
+            <button type="button" aria-expanded={showLinkedAccount} aria-controls={showLinkedAccount ? "linked-account-field" : undefined} onClick={() => {
+              if (showLinkedAccount) setAccountId("");
+              setShowLinkedAccount(!showLinkedAccount);
+            }} className="text-sm font-medium text-teal-800 underline decoration-teal-300 underline-offset-4 hover:text-teal-600">
+              {showLinkedAccount ? "Hide linked account" : "Link an account (optional)"}
+            </button>
+            {showLinkedAccount && <label id="linked-account-field" className="mt-2 block text-sm font-medium">Linked account (optional)
+              <select value={accountId} onChange={(event) => setAccountId(event.target.value)} className={`${inputClass} mt-1`}>
+                <option value="">No linked account</option>
+                {finance.accounts.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · {item.name}</option>)}
+              </select>
+            </label>}
+          </div>}
           <div className="flex gap-2">
-            <button className={buttonClass}>{editing ? "Save" : "Add"}</button>
-            <button type="button" onClick={() => { setEditing(undefined); setShowEditor(false); setType("debit"); setCategory(""); setDescription(""); setShowDescription(false); setAmount(""); setAccountId(""); setError(""); }} className={secondaryButtonClass}>Cancel</button>
+            <button disabled={saving} className={buttonClass}>{saving ? "Saving…" : editing ? "Save" : "Add"}</button>
+            <button type="button" disabled={saving} onClick={() => { setEditing(undefined); setShowEditor(false); setType("debit"); setCategory(""); setDescription(""); setShowDescription(false); setShowLinkedAccount(false); setAmount(""); setAccountId(""); setError(""); }} className={secondaryButtonClass}>Cancel</button>
           </div>
           {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
         </form>
@@ -1047,13 +1095,17 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             <h2 className="font-bold">Recent transactions</h2>
             <p className="mt-1 text-xs text-slate-500">{rows.length} of {finance.transactions.length} household transactions</p>
           </div>
-          <div className="flex min-w-0 flex-1 gap-2 sm:max-w-md">
+          <div className="flex min-w-0 flex-1 flex-wrap gap-2 sm:max-w-2xl">
             <input type="search" aria-label="Search transactions" value={filter} onChange={(event) => { setFilter(event.target.value); setTransactionPage(1); }} placeholder="Search category, date, amount, member…" className={`${inputClass} min-w-0`} />
             <select aria-label="Filter transaction type" value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value); setTransactionPage(1); }} className="rounded-lg border border-slate-300 bg-white px-2 text-sm">
               <option value="all">All types</option>
               <option value="credit">Income & refunds</option>
               <option value="debit">Expense</option>
               <option value="transfer">Transfer</option>
+            </select>
+            <select aria-label="Filter transaction category" value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setTransactionPage(1); }} className="min-w-36 rounded-lg border border-slate-300 bg-white px-2 text-sm">
+              <option value="all">All categories</option>
+              {transactionCategories.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </div>
         </div>
@@ -1070,11 +1122,10 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             </div>
             <div className="flex items-center gap-2 rounded-lg transition-transform duration-200 group-hover:scale-[1.02]">
               <p className={item.type === "credit" && item.purpose === "ordinary" ? "font-semibold text-amber-700" : item.type === "credit" ? "font-semibold text-emerald-700" : item.type === "debit" ? "font-semibold text-red-700" : "font-semibold text-teal-700"}>{item.type === "credit" ? item.purpose === "ordinary" ? "−" : "+" : item.type === "debit" ? "−" : "↔"}{formatMoney(item.amountMinor, currency)}</p>
-              <button onClick={() => setEditing(item)} className={secondaryButtonClass}>Edit</button>
-              <button onClick={() => void onDelete(item.id)} className={secondaryButtonClass}>Delete</button>
+              <EntityActions onEdit={() => setEditing(item)} onDelete={() => onRequestDelete({ recordLabel: item.description || item.category, description: item.type === "transfer" ? "This transfer and its linked account balance changes will be reversed." : "This transaction will be permanently removed from household records.", onConfirm: () => onDelete(item.id) })} />
             </div>
           </div>)}
-          {!rows.length && <p className="py-4 text-sm text-slate-500">{normalizedFilter || typeFilter !== "all" ? "No transactions match your search or filter." : "No transactions yet."}</p>}
+          {!rows.length && <p className="py-4 text-sm text-slate-500">{normalizedFilter || typeFilter !== "all" || categoryFilter !== "all" ? "No transactions match your search or filters." : "No transactions yet."}</p>}
         </div>
         <PaginationControls page={safeTransactionPage} pageCount={transactionPageCount} total={rows.length} pageSize={TRANSACTION_PAGE_SIZE} label="Transactions" onPageChange={setTransactionPage} />
       </section>
@@ -1426,10 +1477,10 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
   );
 }
 
-function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrevious, onDelete, editing, setEditing }: {
-  finance: HouseholdFinanceData; currency: string; month: string; setMonth: (value: string) => void; onSave: (input: Pick<MonthlyBudget, "month" | "period" | "category" | "limitMinor">, existing?: MonthlyBudget) => Promise<void>; onCopyPrevious: (sourceMonth: string, targetMonth: string) => Promise<void>; onDelete: (id: string) => Promise<void>; editing?: MonthlyBudget; setEditing: (item?: MonthlyBudget) => void;
+function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrevious, onDelete, onRequestDelete, editing, setEditing }: {
+  finance: HouseholdFinanceData; currency: string; month: string; setMonth: (value: string) => void; onSave: (input: Pick<MonthlyBudget, "month" | "period" | "category" | "limitMinor">, existing?: MonthlyBudget) => Promise<void>; onCopyPrevious: (sourceMonth: string, targetMonth: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onRequestDelete: (request: DeleteRequest) => void; editing?: MonthlyBudget; setEditing: (item?: MonthlyBudget) => void;
 }) {
-  const [category, setCategory] = useState(""); const [limit, setLimit] = useState(""); const [period, setPeriod] = useState<"monthly" | "yearly">("monthly"); const [error, setError] = useState(""); const [showEditor, setShowEditor] = useState(Boolean(editing));
+  const [category, setCategory] = useState(""); const [limit, setLimit] = useState(""); const [period, setPeriod] = useState<"monthly" | "yearly">("monthly"); const [error, setError] = useState(""); const [showEditor, setShowEditor] = useState(Boolean(editing)); const [savingBudget, setSavingBudget] = useState(false);
   const editorRef = useEditFocus<HTMLElement>(editing?.id);
   const addBudgetButtonRef = useRef<HTMLButtonElement>(null);
   // Reset controlled form fields when a different record is selected.
@@ -1449,7 +1500,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
     document.addEventListener("pointerdown", dismissOnOutsideClick);
     return () => document.removeEventListener("pointerdown", dismissOnOutsideClick);
   }, [editorRef, showEditor, setEditing]);
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); try { await onSave({ month: period === "yearly" ? `${month.slice(0, 4)}-01` : month, period, category, limitMinor: parseMoneyToMinorUnits(limit, currency) }, editing); setEditing(undefined); setCategory(""); setLimit(""); setPeriod("monthly"); setShowEditor(false); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save budget."); } }
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (savingBudget) return; setSavingBudget(true); setError(""); try { await onSave({ month: period === "yearly" ? `${month.slice(0, 4)}-01` : month, period, category, limitMinor: parseMoneyToMinorUnits(limit, currency) }, editing); setEditing(undefined); setCategory(""); setLimit(""); setPeriod("monthly"); setShowEditor(false); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save budget."); } finally { setSavingBudget(false); } }
   const rows = finance.budgets.filter((item) => (item.period ?? "monthly") === "yearly" ? item.month.slice(0, 4) === month.slice(0, 4) : item.month === month);
   const previousMonth = isMonthKey(month) ? previousMonthKey(month) : "";
   const previousMonthBudgetCount = finance.budgets.filter((item) => (item.period ?? "monthly") === "monthly" && item.month === previousMonth).length;
@@ -1481,7 +1532,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
                 <label className="block text-sm font-medium">{period === "monthly" ? "Budget month" : "Budget year"}{period === "monthly" ? <input type="month" required value={month} onChange={(event) => setMonth(event.target.value)} className={`${inputClass} mt-1`} /> : <input type="number" required min="1900" max="9999" value={month.slice(0, 4)} onChange={(event) => setMonth(`${event.target.value}-01`)} className={`${inputClass} mt-1`} />}</label>
                 <label className="block text-sm font-medium">Transaction category<select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}><option value="" disabled>Choose an expense category</option>{editing?.category && !(BUDGET_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{editing.category} (existing)</option>}{BUDGET_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
                 <label className="block text-sm font-medium">{period === "monthly" ? "Monthly limit" : "Yearly limit"}<input required inputMode="decimal" value={limit} onChange={(event) => setLimit(event.target.value)} placeholder={`Amount (${currency})`} className={`${inputClass} mt-1`} /></label>
-                <div className="flex flex-wrap gap-2"><button className={buttonClass}>{editing ? "Save" : "Add"}</button><button type="button" onClick={() => { setEditing(undefined); setShowEditor(false); setCategory(""); setLimit(""); setPeriod("monthly"); setError(""); }} className={secondaryButtonClass}>Cancel</button>{!editing && <button type="button" disabled={!previousMonth || !previousMonthBudgetCount || copyingPreviousMonth} onClick={() => void copyPreviousMonth()} className={`${secondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}>{copyingPreviousMonth ? "Copying…" : "Copy prev month"}</button>}</div>
+                <div className="flex flex-wrap gap-2"><button disabled={savingBudget} className={buttonClass}>{savingBudget ? "Saving…" : editing ? "Save" : "Add"}</button><button type="button" disabled={savingBudget} onClick={() => { setEditing(undefined); setShowEditor(false); setCategory(""); setLimit(""); setPeriod("monthly"); setError(""); }} className={secondaryButtonClass}>Cancel</button>{!editing && <button type="button" disabled={!previousMonth || !previousMonthBudgetCount || copyingPreviousMonth} onClick={() => void copyPreviousMonth()} className={`${secondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}>{copyingPreviousMonth ? "Copying…" : "Copy prev month"}</button>}</div>
                 {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
                 {!editing && <p className="text-xs text-slate-500">Copies all monthly category limits from {previousMonth || "the previous month"} into {month || "the selected month"}, updating matching categories and adding any missing ones.</p>}
               </form>
@@ -1499,7 +1550,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
                   <span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-600"}>{formatMoney(progress.spentMinor, currency)} / {formatMoney(budget.limitMinor, currency)}</span>
                 </div>
                 <div role="progressbar" aria-label={`${budget.category} budget used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={width} className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-[width] duration-500 ${progress.overspent ? "bg-red-500" : "bg-amber-500"}`} style={{ width: `${width}%` }} /></div>
-                <div className="mt-2 flex items-center justify-between text-xs"><span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}>{progress.overspent ? "Overspending alert" : `${progress.percent}% used`}</span><span className="flex gap-3"><button type="button" onClick={() => setEditing(budget)} className="rounded-md px-2 py-1 font-semibold text-teal-800 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">Edit</button><button type="button" onClick={() => void onDelete(budget.id)} className="rounded-md px-2 py-1 text-slate-500 transition hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500">Delete</button></span></div>
+                <div className="mt-2 flex items-center justify-between text-xs"><span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}>{progress.overspent ? "Overspending alert" : `${progress.percent}% used`}</span><EntityActions onEdit={() => setEditing(budget)} onDelete={() => onRequestDelete({ recordLabel: `${budget.category} budget`, description: "The budget limit and its progress tracking will be removed.", onConfirm: () => onDelete(budget.id) })} /></div>
               </div>;
             })}
             {!rows.length && <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">No budgets for {month}. Add one to start tracking spending.</p>}
@@ -1510,7 +1561,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
   );
 }
 
-function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgress, onDelete, editing, setEditing }: {
+function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgress, onDelete, onRequestDelete, editing, setEditing }: {
   finance: HouseholdFinanceData;
   currency: string;
   uid: string;
@@ -1518,6 +1569,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
   onSave: (input: Pick<SavingsGoal, "name" | "targetMinor" | "currentMinor" | "deadline" | "ownerUid">, existing?: SavingsGoal) => Promise<void>;
   onAddProgress: (goalId: string, amountMinor: number, onSuccess: () => void) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onRequestDelete: (request: DeleteRequest) => void;
   editing?: SavingsGoal;
   setEditing: (item?: SavingsGoal) => void;
 }) {
@@ -1526,6 +1578,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
   const [current, setCurrent] = useState("0");
   const [deadline, setDeadline] = useState("");
   const [error, setError] = useState("");
+  const [savingGoal, setSavingGoal] = useState(false);
   const [progressGoalId, setProgressGoalId] = useState<string>();
   const [progressAmount, setProgressAmount] = useState("");
   const [progressError, setProgressError] = useState("");
@@ -1554,6 +1607,8 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingGoal) return;
+    setSavingGoal(true);
     setError("");
     try {
       await onSave({
@@ -1571,6 +1626,8 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
       setShowEditor(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save goal.");
+    } finally {
+      setSavingGoal(false);
     }
   }
 
@@ -1609,7 +1666,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
               <input required inputMode="decimal" value={current} onChange={(event) => setCurrent(event.target.value)} placeholder="Current progress" className={inputClass} />
             </div>
             <input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} className={inputClass} />
-            <div className="flex gap-2"><button className={buttonClass}>{editing ? "Save" : "Add"}</button><button type="button" onClick={() => { setEditing(undefined); setShowEditor(false); setName(""); setTarget(""); setCurrent("0"); setDeadline(""); setError(""); }} className={secondaryButtonClass}>Cancel</button></div>
+            <div className="flex gap-2"><button disabled={savingGoal} className={buttonClass}>{savingGoal ? "Saving…" : editing ? "Save" : "Add"}</button><button type="button" disabled={savingGoal} onClick={() => { setEditing(undefined); setShowEditor(false); setName(""); setTarget(""); setCurrent("0"); setDeadline(""); setError(""); }} className={secondaryButtonClass}>Cancel</button></div>
             {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
           </form>
         </section>}
@@ -1641,8 +1698,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
                 ) : (
                   <div className="mt-2 flex justify-end gap-3 text-xs">
                     <button type="button" onClick={() => { setProgressGoalId(goal.id); setProgressAmount(""); setProgressError(""); }} className="rounded-lg bg-emerald-50 px-3 py-2 font-semibold text-emerald-800 transition hover:bg-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600">＋ Add progress</button>
-                    <button type="button" onClick={() => setEditing(goal)} className="rounded-lg px-3 py-2 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">Edit</button>
-                    <button type="button" onClick={() => void onDelete(goal.id)} className="rounded-lg px-3 py-2 text-slate-500 transition hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500">Delete</button>
+                    <EntityActions onEdit={() => setEditing(goal)} onDelete={() => onRequestDelete({ recordLabel: goal.name, description: "The goal and its saved progress will be permanently removed.", onConfirm: () => onDelete(goal.id) })} />
                   </div>
                 )}
               </div>
@@ -1655,14 +1711,19 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
   );
 }
 
-function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, snapshots, onSaveAccount, onDeleteAccount, onSnapshot, onSaveManualValue, onDeleteManualValue }: {
+function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, snapshots, editingAccount, setEditingAccount, onEditTransaction, onDeleteTransaction, onRequestDelete, onSaveAccount, onDeleteAccount, onSnapshot, onSaveManualValue, onDeleteManualValue }: {
   finance: HouseholdFinanceData;
   currency: string;
   uid: string;
   memberNames: Map<string, string>;
   darkMode: boolean;
   snapshots: Record<string, AccountSnapshot[]>;
-  onSaveAccount: (input: Pick<FinancialAccount, "name" | "kind" | "ownerUid" | "balanceMinor">) => Promise<void>;
+  editingAccount?: FinancialAccount;
+  setEditingAccount: (account?: FinancialAccount) => void;
+  onEditTransaction: (transaction: FinancialTransaction) => void;
+  onDeleteTransaction: (id: string) => Promise<void>;
+  onRequestDelete: (request: DeleteRequest) => void;
+  onSaveAccount: (input: Pick<FinancialAccount, "name" | "kind" | "ownerUid" | "balanceMinor">, existing?: FinancialAccount) => Promise<void>;
   onDeleteAccount: (id: string) => Promise<void>;
   onSnapshot: (accountId: string, month: string, amount: number) => Promise<void>;
   onSaveManualValue: (group: "assets" | "liabilities", input: Pick<ManualValueRecord, "name" | "amountMinor" | "ownerUid">, existing?: ManualValueRecord) => Promise<void>;
@@ -1673,6 +1734,10 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   const [ownerUid, setOwnerUid] = useState(uid);
   const [balance, setBalance] = useState("");
   const [accountError, setAccountError] = useState("");
+  const [savingAccount, setSavingAccount] = useState(false);
+  const [savingManualValue, setSavingManualValue] = useState(false);
+  const [savingSnapshot, setSavingSnapshot] = useState(false);
+  const accountEditorRef = useEditFocus<HTMLFormElement>(editingAccount?.id);
   const [snapshotAccount, setSnapshotAccount] = useState("");
   const [snapshotMonth, setSnapshotMonth] = useState("");
   const [snapshotAmount, setSnapshotAmount] = useState("");
@@ -1697,6 +1762,14 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOwnerUid(uid);
   }, [uid]);
+  useEffect(() => {
+    if (!editingAccount) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setName(editingAccount.name);
+    setKind(editingAccount.kind);
+    setOwnerUid(editingAccount.ownerUid);
+    setBalance(moneyInputValue(editingAccount.balanceMinor, currency));
+  }, [currency, editingAccount]);
 
   const columns = [
     { kind: "brokerage", title: "Brokerage", destination: "brokerage" },
@@ -1714,6 +1787,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     ...accounts.filter((account) => account.createdAt.toMillis() === account.updatedAt.toMillis()).map((account) => ({
       id: `account-${account.id}`,
       kind: "account" as const,
+      account,
       timestamp: account.updatedAt.toMillis(),
       date: new Date(account.updatedAt.toMillis()).toLocaleDateString(),
       title: account.name,
@@ -1726,6 +1800,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
       .map((transaction) => ({
         id: `transaction-${transaction.id}`,
         kind: "transaction" as const,
+        transaction,
         timestamp: transaction.createdAt.toMillis(),
         date: transaction.date,
         title: transaction.description || transaction.category,
@@ -1782,22 +1857,33 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
 
   async function submitAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingAccount) return;
+    setSavingAccount(true);
     setAccountError("");
     try {
-      await onSaveAccount({ name: name.trim(), kind, ownerUid, balanceMinor: parseMoneyToMinorUnits(balance, currency) });
+      await onSaveAccount({ name: name.trim(), kind, ownerUid, balanceMinor: editingAccount?.balanceMinor ?? parseMoneyToMinorUnits(balance, currency) }, editingAccount);
       setName("");
       setBalance("");
     } catch (cause) {
       setAccountError(cause instanceof Error ? cause.message : "Could not save the account.");
+    } finally {
+      setSavingAccount(false);
     }
   }
   async function removeAccount(account: FinancialAccount) {
-    if (!window.confirm(`Permanently delete ${account.name} and its saved monthly snapshots? Linked transactions will remain in your history.`)) return;
-    await onDeleteAccount(account.id);
-    if (snapshotAccount === account.id) setSnapshotAccount("");
+    onRequestDelete({
+      recordLabel: account.name,
+      description: "The account and its saved monthly snapshots will be deleted. Linked transfers must be removed first; linked non-transfer transactions remain in history.",
+      onConfirm: async () => {
+        await onDeleteAccount(account.id);
+        if (snapshotAccount === account.id) setSnapshotAccount("");
+      },
+    });
   }
   async function submitSnapshot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingSnapshot) return;
+    setSavingSnapshot(true);
     setSnapshotError("");
     try {
       if ((snapshots[snapshotAccount] ?? []).some((snapshot) => snapshot.month === snapshotMonth)) {
@@ -1807,10 +1893,14 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
       setSnapshotAmount("");
     } catch (cause) {
       setSnapshotError(cause instanceof Error ? cause.message : "Could not record the snapshot.");
+    } finally {
+      setSavingSnapshot(false);
     }
   }
   async function submitManualValue(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingManualValue) return;
+    setSavingManualValue(true);
     setManualValueError("");
     try {
       await onSaveManualValue(manualValueType, { name: manualValueName, amountMinor: parseMoneyToMinorUnits(manualValueAmount, currency), ownerUid: editingManualValue?.ownerUid ?? uid }, editingManualValue);
@@ -1819,6 +1909,8 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
       setManualValueAmount("");
     } catch (cause) {
       setManualValueError(cause instanceof Error ? cause.message : `Could not save the ${manualValueType === "assets" ? "asset" : "liability"}.`);
+    } finally {
+      setSavingManualValue(false);
     }
   }
 
@@ -1880,14 +1972,14 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     </div>
     </section>
     <section className="grid gap-6 xl:grid-cols-2">
-      <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Add an account</h2><p className="mt-1 text-xs text-slate-500">Enter the opening balance for this account in {currency}. Future balance changes are recorded as transfers.</p><form onSubmit={submitAccount} className="mt-4 space-y-3"><input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} /><select value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="savings">Cash / Personal Savings</option><option value="brokerage">Brokerage</option><option value="retirement">Retirement / 401(k)</option></select><select value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select><input required inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Opening balance" className={inputClass} /><button className={buttonClass}>Add account</button>{accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}</form><div className="mt-5 border-t border-slate-100 pt-4"><h3 className="font-semibold">Household accounts</h3><div className="mt-2 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span><button type="button" onClick={() => void removeAccount(account)} className="text-xs font-semibold text-red-700 underline">Delete</button></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div></div></section>
+      <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">{editingAccount ? "Edit account" : "Add an account"}</h2><p className="mt-1 text-xs text-slate-500">{editingAccount ? "Update account details while keeping its saved balance." : `Enter the opening balance for this account in ${currency}. Future balance changes are recorded as transfers.`}</p><form ref={accountEditorRef} onSubmit={submitAccount} className="mt-4 space-y-3"><input required disabled={savingAccount} maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} /><select disabled={savingAccount} value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="savings">Cash / Personal Savings</option><option value="brokerage">Brokerage</option><option value="retirement">Retirement / 401(k)</option></select><select disabled={savingAccount} value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select><input required disabled={Boolean(editingAccount) || savingAccount} inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Opening balance" className={`${inputClass} disabled:bg-slate-100 disabled:text-slate-500`} />{editingAccount && <p className="text-xs text-slate-500">Account balance is changed by recording transfers.</p>}<div className="flex gap-2"><button disabled={savingAccount} className={buttonClass}>{savingAccount ? "Saving…" : editingAccount ? "Save account" : "Add account"}</button>{editingAccount && <button type="button" disabled={savingAccount} onClick={() => { setEditingAccount(undefined); setName(""); setBalance(""); setAccountError(""); }} className={secondaryButtonClass}>Cancel</button>}</div>{accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}</form><div className="mt-5 border-t border-slate-100 pt-4"><h3 className="font-semibold">Household accounts</h3><div className="mt-2 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span><EntityActions onEdit={() => setEditingAccount(account)} onDelete={() => void removeAccount(account)} /></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div></div></section>
       <section ref={manualValueEditorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold">Household assets &amp; liabilities</h2>
         <p className="mt-1 text-xs text-slate-500">Record assets and debts. Assets increase household net worth; liabilities reduce it.</p>
         <form onSubmit={submitManualValue} className="mt-4 space-y-3">
           <label className="block text-sm font-medium">Record type<select value={manualValueType} onChange={(event) => setManualValueType(event.target.value as "assets" | "liabilities")} className={`${inputClass} mt-1`}><option value="assets">Asset</option><option value="liabilities">Liability</option></select></label>
           <input required maxLength={80} value={manualValueName} onChange={(event) => setManualValueName(event.target.value)} placeholder={manualValueType === "assets" ? "Asset name (e.g. home, vehicle)" : "Debt name (e.g. car loan)"} className={inputClass} />
-          <div className="flex gap-2"><input required inputMode="decimal" value={manualValueAmount} onChange={(event) => setManualValueAmount(event.target.value)} placeholder={`Current value (${currency})`} className={inputClass} /><button className={buttonClass}>{editingManualValue ? "Save" : "Add"}</button></div>
+          <div className="flex gap-2"><input required disabled={savingManualValue} inputMode="decimal" value={manualValueAmount} onChange={(event) => setManualValueAmount(event.target.value)} placeholder={`Current value (${currency})`} className={inputClass} /><button disabled={savingManualValue} className={buttonClass}>{savingManualValue ? "Saving…" : editingManualValue ? "Save" : "Add"}</button></div>
           {editingManualValue && <button type="button" onClick={() => { setEditingManualValue(undefined); setManualValueName(""); setManualValueAmount(""); }} className={secondaryButtonClass}>Cancel</button>}
           {manualValueError && <p role="alert" className="text-sm text-red-700">{manualValueError}</p>}
         </form>
@@ -1899,7 +1991,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
             <div key={group} className="border-t border-slate-100 pt-4">
               <h3 className="font-semibold">{title}</h3>
               <div className="mt-2 divide-y divide-slate-100">
-                {records.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-slate-500">{memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(item.amountMinor, currency)}</span>{item.ownerUid === uid && <><button type="button" onClick={() => { setManualValueType(group); setEditingManualValue(item); setManualValueName(item.name); setManualValueAmount(moneyInputValue(item.amountMinor, currency)); }} className="text-xs font-semibold text-teal-800 underline">Edit</button><button type="button" onClick={() => void onDeleteManualValue(group, item.id)} className="text-xs font-semibold text-slate-500 underline">Delete</button></>}</div></div>)}
+                {records.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-slate-500">{memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(item.amountMinor, currency)}</span>{item.ownerUid === uid && <EntityActions onEdit={() => { setManualValueType(group); setEditingManualValue(item); setManualValueName(item.name); setManualValueAmount(moneyInputValue(item.amountMinor, currency)); }} onDelete={() => onRequestDelete({ recordLabel: item.name, description: `This ${group === "assets" ? "asset" : "liability"} will be removed from household net worth calculations.`, onConfirm: () => onDeleteManualValue(group, item.id) })} />}</div></div>)}
                 {!records.length && <p className="py-3 text-sm text-slate-500">No {group} added.</p>}
               </div>
             </div>
@@ -1907,11 +1999,11 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
         </div>
       </section>
     </section>
-    <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Recent investment activity</h2><p className="mt-1 text-xs text-slate-500">Includes account additions and balance changes, plus investment contributions and transfers. Account balances are not counted as transactions.</p><div className="mt-3 divide-y divide-slate-100">{visibleInvestmentActivity.map((item) => <div key={item.id} className="flex justify-between gap-3 py-3 text-sm"><div><p className="font-medium">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.detail} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><p className="font-semibold text-teal-800">{formatMoney(item.amountMinor, currency)}</p></div>)}{!recentInvestmentActivity.length && <p className="py-3 text-sm text-slate-500">No investment activity recorded yet.</p>}</div><PaginationControls page={safeInvestmentActivityPage} pageCount={investmentActivityPageCount} total={recentInvestmentActivity.length} pageSize={INVESTMENT_ACTIVITY_PAGE_SIZE} label="Investment activity" onPageChange={setInvestmentActivityPage} /></section>
+    <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Recent investment activity</h2><p className="mt-1 text-xs text-slate-500">Includes account additions and balance changes, plus investment contributions and transfers. Account balances are not counted as transactions.</p><div className="mt-3 divide-y divide-slate-100">{visibleInvestmentActivity.map((item) => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div className="min-w-0"><p className="font-medium">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.detail} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><p className="font-semibold text-teal-800">{formatMoney(item.amountMinor, currency)}</p>{item.kind === "transaction" ? <EntityActions onEdit={() => onEditTransaction(item.transaction)} onDelete={() => onRequestDelete({ recordLabel: item.title, description: item.transaction.type === "transfer" ? "This transfer and its linked account balance changes will be reversed." : "This investment contribution will be permanently removed.", onConfirm: () => onDeleteTransaction(item.transaction.id) })} /> : <EntityActions onEdit={() => setEditingAccount(item.account)} onDelete={() => void removeAccount(item.account)} />}</div></div>)}{!recentInvestmentActivity.length && <p className="py-3 text-sm text-slate-500">No investment activity recorded yet.</p>}</div><PaginationControls page={safeInvestmentActivityPage} pageCount={investmentActivityPageCount} total={recentInvestmentActivity.length} pageSize={INVESTMENT_ACTIVITY_PAGE_SIZE} label="Investment activity" onPageChange={setInvestmentActivityPage} /></section>
     <section className="rounded-2xl border border-slate-200 bg-white p-5">
       <h2 className="font-bold">Add a monthly snapshot</h2>
       <p className="mt-1 text-xs text-slate-500">Historical snapshots are saved at the bottom of this page and preserve existing monthly records.</p>
-      <form onSubmit={submitSnapshot} className="mt-4 grid gap-2 sm:grid-cols-[1.4fr_1fr_1fr_auto]"><select required value={snapshotAccount} onChange={(event) => setSnapshotAccount(event.target.value)} className={inputClass}><option value="">Choose account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {memberNames.get(account.ownerUid) ?? "Member"}</option>)}</select><input required aria-label="Snapshot month" type="month" value={snapshotMonth} onChange={(event) => setSnapshotMonth(event.target.value)} className={inputClass} /><input required aria-label="Snapshot balance" inputMode="decimal" value={snapshotAmount} onChange={(event) => setSnapshotAmount(event.target.value)} placeholder="Historical balance" className={inputClass} /><button className={buttonClass}>Save snapshot</button></form>{snapshotError && <p role="alert" className="mt-2 text-sm text-red-700">{snapshotError}</p>}
+      <form onSubmit={submitSnapshot} className="mt-4 grid gap-2 sm:grid-cols-[1.4fr_1fr_1fr_auto]"><select required disabled={savingSnapshot} value={snapshotAccount} onChange={(event) => setSnapshotAccount(event.target.value)} className={inputClass}><option value="">Choose account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {memberNames.get(account.ownerUid) ?? "Member"}</option>)}</select><input required disabled={savingSnapshot} aria-label="Snapshot month" type="month" value={snapshotMonth} onChange={(event) => setSnapshotMonth(event.target.value)} className={inputClass} /><input required disabled={savingSnapshot} aria-label="Snapshot balance" inputMode="decimal" value={snapshotAmount} onChange={(event) => setSnapshotAmount(event.target.value)} placeholder="Historical balance" className={inputClass} /><button disabled={savingSnapshot} className={buttonClass}>{savingSnapshot ? "Saving…" : "Save snapshot"}</button></form>{snapshotError && <p role="alert" className="mt-2 text-sm text-red-700">{snapshotError}</p>}
     </section>
   </div>;
 }

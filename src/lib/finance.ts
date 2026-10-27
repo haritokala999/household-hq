@@ -230,7 +230,11 @@ export async function saveAccount(
   currency: FinancialAccount["currency"],
   input: AccountInput,
   existing?: FinancialAccount,
+  initialSnapshotMonth?: string,
 ) {
+  if (initialSnapshotMonth && !isMonthKey(initialSnapshotMonth)) {
+    throw new Error("Choose a valid initial snapshot month.");
+  }
   if (existing && existing.balanceMinor !== input.balanceMinor) {
     throw new Error("Account balances can only change through a transfer.");
   }
@@ -246,7 +250,19 @@ export async function saveAccount(
     createdAt: existing?.createdAt ?? serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  await setDoc(reference, values);
+  if (!existing && initialSnapshotMonth) {
+    const batch = writeBatch(database);
+    batch.set(reference, values);
+    batch.set(doc(database, ...path(householdId, "accounts"), reference.id, "snapshots", initialSnapshotMonth), {
+      month: initialSnapshotMonth,
+      amountMinor: input.balanceMinor,
+      recordedBy: actorUid,
+      createdAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } else {
+    await setDoc(reference, values);
+  }
   return reference.id;
 }
 
