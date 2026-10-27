@@ -36,6 +36,7 @@ import {
   getAccountSnapshots,
   isOrdinaryExpenseTransaction,
   markRecurringPaymentPaid,
+  undoRecurringPaymentPaid,
   isCalendarDate,
   isMonthKey,
   loadHouseholdFinance,
@@ -53,6 +54,7 @@ import {
   type HouseholdFinanceData,
 } from "@/lib/finance";
 import { getHouseholdMembers } from "@/lib/household-memberships";
+import { sortOptionsAlphabetically } from "@/lib/sorting";
 import type {
   AccountSnapshot,
   FinancialAccount,
@@ -69,7 +71,7 @@ import type {
 import type { CsvColumnMapping, ImportRow, ImportTransactionType } from "@/lib/statement-import";
 import { HOUSEHOLD_CURRENCIES, HOUSEHOLD_CURRENCY_NAMES } from "@/lib/types";
 
-type Section = "Dashboard" | "Transactions" | "Budgets" | "Goals" | "Investments" | "Household";
+type Section = "Dashboard" | "Transactions" | "Budgets" | "Goals" | "Budgets & Goals" | "Investments" | "Household";
 type AppNotification = {
   id: number;
   message: string;
@@ -78,8 +80,8 @@ type AppNotification = {
 };
 type CelebrationKind = "goal" | "budget" | "income" | "transfer";
 type Celebration = { id: number; kind: CelebrationKind };
-type DeleteRequest = { recordLabel: string; description: string; onConfirm: () => Promise<void> };
-const workspaceSections: Section[] = ["Dashboard", "Transactions", "Budgets", "Goals", "Investments"];
+type DeleteRequest = { recordLabel: string; description: string; title?: string; confirmLabel?: string; onConfirm: () => Promise<void> };
+const workspaceSections: Section[] = ["Dashboard", "Transactions", "Budgets & Goals", "Investments"];
 const currencyFlags: Record<HouseholdCurrency, string> = {
   USD: "🇺🇸",
   CAD: "🇨🇦",
@@ -94,6 +96,7 @@ const buttonClass = "rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold te
 const secondaryButtonClass = "rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800";
 const TRANSACTION_PAGE_SIZE = 10;
 const INVESTMENT_ACTIVITY_PAGE_SIZE = 8;
+const categoryOptionLabel = (category: string) => category === "MISC" ? "Miscellaneous" : category;
 const emptyFinance: HouseholdFinanceData = {
   accounts: [], categories: [], transactions: [], budgets: [], goals: [], assets: [], liabilities: [], recurringPayments: [],
 };
@@ -123,7 +126,13 @@ function useEditFocus<T extends HTMLElement>(targetKey: boolean | string | undef
 export default function Home() {
   const router = useRouter();
   const { uid, households, activeHouseholdId, defaultHouseholdId, loading: householdsLoading, error: householdError, retry, refreshHouseholds, selectHousehold, setDefaultHousehold } = useHouseholds();
-  const [section, setSection] = useState<Section>("Dashboard");
+  const [section, setSectionState] = useState<Section>("Dashboard");
+  const [sectionDirection, setSectionDirection] = useState<"left" | "right">("right");
+  function setSection(nextSection: Section) {
+    const position = (item: Section) => Math.max(0, workspaceSections.indexOf(item)) + (item === "Household" ? workspaceSections.length : 0);
+    if (nextSection !== section) setSectionDirection(position(nextSection) > position(section) ? "left" : "right");
+    setSectionState(nextSection);
+  }
   const [finance, setFinance] = useState<HouseholdFinanceData>(emptyFinance);
   const [members, setMembers] = useState<HouseholdMember[]>([]);
   const [loadingFinance, setLoadingFinance] = useState(false);
@@ -136,7 +145,8 @@ export default function Home() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
-  const profileMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileProfileMenuRef = useRef<HTMLDivElement>(null);
+  const profileMenuReturnFocusRef = useRef<HTMLButtonElement>(null);
   const notificationSequence = useRef(0);
   const celebrationSequence = useRef(0);
   const activityHouseholdRef = useRef<string | undefined>(undefined);
@@ -162,12 +172,13 @@ export default function Home() {
   useEffect(() => {
     if (!showProfileMenu) return;
     function dismissOnOutsideClick(event: PointerEvent) {
-      if (!(event.target instanceof Node) || !profileMenuRef.current?.contains(event.target)) setShowProfileMenu(false);
+      if (!(event.target instanceof Node)
+        || (!profileMenuRef.current?.contains(event.target) && !mobileProfileMenuRef.current?.contains(event.target))) setShowProfileMenu(false);
     }
     function dismissOnEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       setShowProfileMenu(false);
-      profileMenuTriggerRef.current?.focus();
+      profileMenuReturnFocusRef.current?.focus();
     }
     document.addEventListener("pointerdown", dismissOnOutsideClick);
     document.addEventListener("keydown", dismissOnEscape);
@@ -573,7 +584,7 @@ export default function Home() {
                   </svg>
                   {unreadNotifications > 0 && <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{unreadNotifications > 9 ? "9+" : unreadNotifications}</span>}
                 </button>
-                {showNotifications && <div role="dialog" aria-label="Notifications" className="absolute right-0 z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-xl">
+                {showNotifications && <div role="dialog" aria-label="Notifications" className="motion-pop-in absolute right-0 z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-xl">
                   <div className="flex items-center justify-between">
                     <h2 className="font-bold">Notifications</h2>
                     <button type="button" onClick={() => setShowNotifications(false)} aria-label="Close notifications" className="rounded-md px-2 py-1 text-slate-500 hover:bg-slate-100">×</button>
@@ -599,78 +610,63 @@ export default function Home() {
                   </> : householdActivity.length === 0 && <p className="mt-3 text-sm text-slate-500">You’re all caught up.</p>}
                 </div>}
               </div>
-              <div ref={profileMenuRef} className="relative">
+              <div ref={profileMenuRef} className="relative hidden md:block">
                 <button
                   type="button"
-                  ref={profileMenuTriggerRef}
                   aria-label="Profile menu"
                   aria-expanded={showProfileMenu}
                   aria-haspopup="true"
                   title="Profile and settings"
-                  onClick={() => setShowProfileMenu((open) => !open)}
+                  onClick={(event) => { profileMenuReturnFocusRef.current = event.currentTarget; setShowProfileMenu((open) => !open); }}
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-slate-200 bg-white py-1 pl-1 pr-2 text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 sm:h-11 sm:pl-1.5 sm:pr-3"
                 >
                   <span aria-hidden="true" className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-teal-700 text-xs font-semibold text-white">{profileInitials}</span>
                   <span className="hidden max-w-32 truncate text-sm font-semibold sm:inline">{profileName}</span>
                   <svg aria-hidden="true" viewBox="0 0 20 20" className="hidden h-4 w-4 text-slate-400 sm:block" fill="currentColor"><path fillRule="evenodd" d="M5.22 7.47a.75.75 0 0 1 1.06 0L10 11.19l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.53a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
                 </button>
-                {showProfileMenu && <div role="menu" aria-label="Profile and settings" className="absolute right-0 z-40 mt-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 text-slate-900 shadow-xl md:-right-8">
-                  <div className="flex items-center justify-between gap-2 px-3 py-2.5">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Signed in as</p>
-                      <p className="mt-1 truncate text-sm font-semibold">{profileName}</p>
-                      {profileEmail && <p className="mt-0.5 truncate text-xs text-slate-500">{profileEmail}</p>}
-                    </div>
-                    <button type="button" role="menuitem" aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} onClick={toggleTheme} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">
-                      {darkMode
-                        ? <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg></span>
-                        : <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z" /></svg></span>}
-                    </button>
-                  </div>
-                  <div className="my-1 border-t border-slate-200" />
-                  <button type="button" role="menuitem" onClick={() => { setSection("Household"); setShowProfileMenu(false); }} className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium hover:bg-slate-50">
-                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center"><WorkspaceIcon section="Household" /></span>My Households
-                  </button>
-                  <div className="my-1 border-t border-slate-200" />
-                  <button type="button" role="menuitem" disabled={signingOut} onClick={() => { setShowProfileMenu(false); void handleSignOut(); }} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold transition disabled:opacity-60 ${darkMode ? "bg-red-950/70 text-red-200 hover:bg-red-900" : "text-red-700 hover:bg-red-50"}`}>
-                    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" /></svg></span>
-                    {signingOut ? "Signing out…" : "Sign out"}
-                  </button>
-                </div>}
+                {showProfileMenu && <ProfileMenuPanel profileName={profileName} profileEmail={profileEmail} darkMode={darkMode} signingOut={signingOut} onToggleTheme={toggleTheme} onOpenHouseholds={() => { setSection("Household"); setShowProfileMenu(false); }} onSignOut={() => { setShowProfileMenu(false); void handleSignOut(); }} />}
               </div>
             </div>
           </header>
           <nav aria-label="Workspace" className="workspace-nav glass-nav fixed inset-x-0 bottom-0 z-40 mx-0 flex w-full max-w-none justify-around gap-1 rounded-none rounded-t-2xl p-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:sticky md:inset-x-auto md:top-4 md:bottom-auto md:mx-auto md:mb-4 md:mt-0 md:w-fit md:max-w-[calc(100%-2rem)] md:justify-start md:rounded-full md:p-2">
-            {(["Dashboard", "Transactions", "Budgets", "Goals", "Investments"] as const).map((item) => renderWorkspaceItem(item, "mobile-workspace-nav-item"))}
+            {(["Transactions", "Budgets & Goals", "Dashboard", "Investments"] as const).map((item) => renderWorkspaceItem(item, "mobile-workspace-nav-item"))}
+            <div ref={mobileProfileMenuRef} className="relative flex min-w-0 flex-1 justify-center md:hidden">
+              <button type="button" aria-label="Profile menu" aria-expanded={showProfileMenu} aria-haspopup="true" title="Profile and settings" onClick={(event) => { profileMenuReturnFocusRef.current = event.currentTarget; setShowProfileMenu((open) => !open); }} className={`mobile-workspace-nav-item group inline-flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] font-medium leading-none transition-all duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 sm:text-[11px] ${showProfileMenu ? "glass-nav-active" : "glass-nav-idle"}`}>
+                <span aria-hidden="true" className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors ${showProfileMenu ? "bg-teal-100 text-teal-800" : "bg-slate-100/80 text-slate-600"}`}>{profileInitials}</span><span>Profile</span>
+              </button>
+              {showProfileMenu && <ProfileMenuPanel profileName={profileName} profileEmail={profileEmail} darkMode={darkMode} signingOut={signingOut} onToggleTheme={toggleTheme} onOpenHouseholds={() => { setSection("Household"); setShowProfileMenu(false); }} onSignOut={() => { setShowProfileMenu(false); void handleSignOut(); }} />}
+            </div>
             {workspaceSections.map((item) => renderWorkspaceItem(item, "desktop-workspace-nav-item"))}
           </nav>
           <div className="mx-auto max-w-7xl space-y-6 px-4 pb-28 pt-5 sm:px-8 sm:pt-8 md:pb-8">
             {financeError && <ErrorPanel message={financeError} onRetry={refresh} />}
             {loadingFinance ? <LoadingPanel label="Loading household records…" /> : (
-              <>
-                {section === "Dashboard" && <Dashboard finance={finance} month={month} todayMonth={todayMonth} snapshotHistory={snapshotHistory} setMonth={setMonth} currency={currency} profileName={profileName} onOpen={setSection} onRequestDelete={requestDelete} onAddPayment={(input) => runAction(
+              <div key={section} className={`workspace-page-enter workspace-page-enter-${sectionDirection}`}>
+                {section === "Dashboard" && <Dashboard finance={finance} month={month} todayMonth={todayMonth} snapshotHistory={snapshotHistory} memberNames={memberNames} setMonth={setMonth} currency={currency} profileName={profileName} onOpen={setSection} onRequestDelete={requestDelete} onAddPayment={(input) => runAction(
                   () => saveRecurringPayment(db, householdId!, uid!, input),
                   input.frequency === "once" ? "One-time bill added." : "Recurring bill added.",
                   undefined,
                   undefined,
                   true,
-                )} onMarkPaymentPaid={(id, dueDate) => runAction(() => markRecurringPaymentPaid(db, householdId!, uid!, id, dueDate), "Bill marked paid and added to transactions.", undefined, undefined, true)} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.", undefined, undefined, true)} />}
-                {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} householdId={householdId!} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined, true)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} onImportComplete={refresh} editing={editingTransaction} setEditing={setEditingTransaction} />}
-                {section === "Budgets" && <BudgetsSection finance={finance} currency={currency} month={month} setMonth={setMonth} onSave={(input, existing) => runAction(() => saveBudget(db, householdId!, uid!, input, existing), "Budget saved.", undefined, existing ? undefined : "budget", true)} onCopyPrevious={(sourceMonth, targetMonth) => runAction(() => copyPreviousMonthBudgets(db, householdId!, uid!, sourceMonth, targetMonth, finance.budgets), "Previous month’s budgets copied into the selected month.", undefined, undefined, true)} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "budgets", id), "Budget deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} editing={editingBudget} setEditing={setEditingBudget} />}
-                {section === "Goals" && <GoalsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} onSave={(input, existing) => runAction(() => saveGoal(db, householdId!, uid!, input, existing), "Goal saved.", undefined, !existing && input.currentMinor >= input.targetMinor ? "goal" : undefined, true)} onAddProgress={(goalId, amountMinor, onSuccess) => {
+                )} onMarkPaymentPaid={(id, dueDate) => runAction(() => markRecurringPaymentPaid(db, householdId!, uid!, id, dueDate), "Bill marked paid and added to transactions.", undefined, undefined, true)} onUnmarkPaymentPaid={(id, dueDate) => runAction(() => undoRecurringPaymentPaid(db, householdId!, id, dueDate), "Bill marked unpaid and its expense transaction removed.", undefined, undefined, true)} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.", undefined, undefined, true)} />}
+                {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} chartMonth={month || todayMonth} householdId={householdId!} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined, true)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} onImportComplete={refresh} editing={editingTransaction} setEditing={setEditingTransaction} />}
+                {section === "Budgets & Goals" && <div className="grid items-start gap-6 xl:grid-cols-2">
+                  <BudgetsSection finance={finance} currency={currency} month={month} setMonth={setMonth} onSave={(input, existing) => runAction(() => saveBudget(db, householdId!, uid!, input, existing), "Budget saved.", undefined, existing ? undefined : "budget", true)} onCopyPrevious={(sourceMonth, targetMonth) => runAction(() => copyPreviousMonthBudgets(db, householdId!, uid!, sourceMonth, targetMonth, finance.budgets), "Previous month’s budgets copied into the selected month.", undefined, undefined, true)} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "budgets", id), "Budget deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} editing={editingBudget} setEditing={setEditingBudget} />
+                  <GoalsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} onSave={(input, existing) => runAction(() => saveGoal(db, householdId!, uid!, input, existing), "Goal saved.", undefined, !existing && input.currentMinor >= input.targetMinor ? "goal" : undefined, true)} onAddProgress={(goalId, amountMinor, onSuccess) => {
                   const goal = finance.goals.find((item) => item.id === goalId);
                   const completesGoal = Boolean(goal && goal.currentMinor < goal.targetMinor && goal.currentMinor + amountMinor >= goal.targetMinor);
                   return runAction(() => addGoalProgress(db, householdId!, goalId, amountMinor), completesGoal ? "Goal achieved — congratulations!" : "Goal progress updated.", onSuccess, completesGoal ? "goal" : undefined, true);
-                }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} editing={editingGoal} setEditing={setEditingGoal} />}
+                  }} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "goals", id), "Goal deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} editing={editingGoal} setEditing={setEditingGoal} />
+                </div>}
                 {section === "Investments" && <InvestmentsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} darkMode={darkMode} snapshots={snapshotHistory} editingAccount={editingAccount} setEditingAccount={setEditingAccount} onEditTransaction={(transaction) => { setEditingTransaction(transaction); setSection("Transactions"); }} onDeleteTransaction={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} onSaveAccount={(input, existing) => runAction(() => saveAccount(db, householdId!, uid!, currency, input, existing, existing ? undefined : currentMonthKey()), existing ? "Account updated." : "Account added.", () => setEditingAccount(undefined), undefined, true)} onDeleteAccount={(id) => runAction(() => deleteAccount(db, householdId!, id), "Account and its snapshots deleted.", () => setEditingAccount(undefined), undefined, true)} onSnapshot={(accountId, snapshotMonth, amount) => runAction(() => addAccountSnapshot(db, householdId!, accountId, uid!, snapshotMonth, amount), "Monthly snapshot recorded.", undefined, undefined, true)} onSaveManualValue={(group, input, existing) => runAction(() => saveManualValue(db, householdId!, uid!, group, input, existing), `${group === "assets" ? "Asset" : "Liability"} saved.`, undefined, undefined, true)} onDeleteManualValue={(group, id) => runAction(() => deleteRecord(db, householdId!, group, id), `${group === "assets" ? "Asset" : "Liability"} deleted.`, undefined, undefined, true)} />}
                 {section === "Household" && <HouseholdSection householdName={selectedHousehold?.householdName ?? ""} uid={uid ?? ""} households={households} activeHouseholdId={householdId ?? ""} defaultHouseholdId={defaultHouseholdId} onSelectHousehold={selectHousehold} onSetDefaultHousehold={setDefaultHousehold} onRenameHousehold={handleRenameHousehold} onCreateHousehold={handleCreateAdditionalHousehold} onJoinHousehold={handleJoinAnotherHousehold} isOwner={selectedHousehold?.role === "owner"} members={members} invitationCode={invitationCode} onInvite={handleCreateInvitation} onPromoteMember={handlePromoteMember} onTransferOwnership={handleTransferOwnership} updatingOwnership={transferringOwnership || promotingMember} />}
-              </>
+              </div>
             )}
 
           </div>
         </section>
         {toast && <div key={toast.id} role={toast.type === "error" ? "alert" : "status"} aria-live={toast.type === "error" ? "assertive" : "polite"} className={`notification-toast fixed right-4 top-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] items-start gap-3 rounded-xl border p-4 shadow-xl ${toast.type === "error" ? "border-red-200 bg-white text-red-900" : "border-emerald-200 bg-white text-emerald-900"}`}><span aria-hidden="true" className={`mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${toast.type === "error" ? "bg-red-600" : "bg-emerald-600"}`}>{toast.type === "error" ? "!" : "✓"}</span><p className="flex-1 text-sm font-medium">{toast.message}</p><button type="button" onClick={() => setToast(undefined)} aria-label="Dismiss notification" className="rounded-md px-1 text-lg leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">×</button></div>}
-        {deleteRequest && <ConfirmationDialog title={`Delete ${deleteRequest.recordLabel}?`} description={deleteRequest.description} isPending={deleting} onCancel={() => setDeleteRequest(undefined)} onConfirm={() => void confirmDelete()} />}
+        {deleteRequest && <ConfirmationDialog title={deleteRequest.title ?? `Delete ${deleteRequest.recordLabel}?`} description={deleteRequest.description} confirmLabel={deleteRequest.confirmLabel} isPending={deleting} onCancel={() => setDeleteRequest(undefined)} onConfirm={() => void confirmDelete()} />}
         {celebration && <CelebrationEffect key={celebration.id} kind={celebration.kind} />}
       </main>
     </AuthGuard>
@@ -714,6 +710,7 @@ function WorkspaceIcon({ section }: { section: Section }) {
     Transactions: <><path d="M6 3.5h9l3 3V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 20z" /><path d="M14.5 3.5V7H18M9 11h6M9 15h6" /></>,
     Budgets: <><path d="M4 7.5h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h13" /><path d="M15 12h6v4h-6a2 2 0 0 1 0-4Z" /><circle cx="16" cy="14" r=".5" fill="currentColor" stroke="none" /></>,
     Goals: <><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" /></>,
+    "Budgets & Goals": <><path d="M4 6.5h10a2 2 0 0 1 2 2v11H6a2 2 0 0 1-2-2z" /><path d="M8 10h4M8 13h4M8 16h2" /><circle cx="17.5" cy="15.5" r="4" /><path d="m15.8 15.5 1.2 1.2 2.2-2.5" /></>,
     Investments: <><path d="M4 19V5M4 19h16" /><path d="m7 15 4-4 3 2 5-6" /><path d="M16 7h3v3" /></>,
     Household: <><path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="10" cy="7" r="4" /><path d="M20 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
   }[section];
@@ -749,6 +746,33 @@ function FeatureHeading({ section, title, description }: { section: Section; tit
   );
 }
 
+function ProfileMenuPanel({ profileName, profileEmail, darkMode, signingOut, onToggleTheme, onOpenHouseholds, onSignOut }: {
+  profileName: string;
+  profileEmail: string;
+  darkMode: boolean;
+  signingOut: boolean;
+  onToggleTheme: () => void;
+  onOpenHouseholds: () => void;
+  onSignOut: () => void;
+}) {
+  return <div role="menu" aria-label="Profile and settings" className="motion-pop-in absolute bottom-full right-0 z-50 mb-2 w-64 rounded-2xl border border-slate-200 bg-white p-2 text-slate-900 shadow-xl md:bottom-auto md:top-full md:mt-2 md:mb-0 md:-right-8">
+    <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+      <div className="min-w-0"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Signed in as</p><p className="mt-1 truncate text-sm font-semibold">{profileName}</p>{profileEmail && <p className="mt-0.5 truncate text-xs text-slate-500">{profileEmail}</p>}</div>
+      <button type="button" role="menuitem" aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"} title={darkMode ? "Switch to light mode" : "Switch to dark mode"} onClick={onToggleTheme} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">
+        {darkMode
+          ? <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg></span>
+          : <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z" /></svg></span>}
+      </button>
+    </div>
+    <div className="my-1 border-t border-slate-200" />
+    <button type="button" role="menuitem" onClick={onOpenHouseholds} className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium hover:bg-slate-50"><span className="inline-flex h-8 w-8 shrink-0 items-center justify-center"><WorkspaceIcon section="Household" /></span>My Households</button>
+    <div className="my-1 border-t border-slate-200" />
+    <button type="button" role="menuitem" disabled={signingOut} onClick={onSignOut} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold transition disabled:opacity-60 ${darkMode ? "bg-red-950/70 text-red-200 hover:bg-red-900" : "text-red-700 hover:bg-red-50"}`}>
+      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" /></svg></span>{signingOut ? "Signing out…" : "Sign out"}
+    </button>
+  </div>;
+}
+
 function MetricIcon({ name }: { name: "netWorth" | "income" | "expenses" }) {
   const paths = {
     netWorth: <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M3 10h18M7 7V5a2 2 0 0 1 2-2h8" /><path d="M16 14h2" /></>,
@@ -768,9 +792,120 @@ function DashboardSectionIcon({ name }: { name: "cashFlow" | "category" | "bills
   return <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-800 ring-1 ring-teal-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">{drawings[name]}</svg></span>;
 }
 
-function MetricCard({ title, value, detail, accent = "emerald", note, icon, extra }: { title: string; value: string; detail: string; accent?: string; note?: string; icon: "netWorth" | "income" | "expenses"; extra?: ReactNode }) {
+function MetricCard({ title, value, detail, accent = "emerald", note, icon, extra, onClick }: { title: string; value: string; detail: string; accent?: string; note?: string; icon: "netWorth" | "income" | "expenses"; extra?: ReactNode; onClick?: (trigger: HTMLButtonElement) => void }) {
   const colors: Record<string, string> = { emerald: "bg-emerald-50 text-emerald-700 ring-emerald-100", blue: "bg-sky-50 text-sky-700 ring-sky-100", amber: "bg-orange-50 text-orange-800 ring-orange-100", violet: "bg-violet-50 text-violet-700 ring-violet-100" };
-  return <article className="group flex h-full min-h-[150px] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md motion-reduce:transition-none"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-medium text-slate-500">{title}</p><p className="mt-3 text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">{value}</p></div><span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none ${colors[accent] ?? colors.emerald}`}><MetricIcon name={icon} /></span></div><p className={`mt-3 inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${colors[accent] ?? colors.emerald}`}>{detail}</p>{note && <p className="mt-2 text-xs leading-5 text-slate-500">{note}</p>}{extra && <div className="mt-auto pt-3">{extra}</div>}</article>;
+  const className = `group flex h-full min-h-[150px] w-full flex-col rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md motion-reduce:transition-none ${onClick ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600" : ""}`;
+  const content = <><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-medium text-slate-500">{title}</p><p className="mt-3 text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">{value}</p></div><span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none ${colors[accent] ?? colors.emerald}`}><MetricIcon name={icon} /></span></div><p className={`mt-3 inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${colors[accent] ?? colors.emerald}`}>{detail}</p>{note && <p className="mt-2 text-xs leading-5 text-slate-500">{note}</p>}{extra && <div className="mt-auto pt-3">{extra}</div>}</>;
+  return onClick
+    ? <button type="button" aria-label={`${title}: ${value}. View asset and liability details.`} aria-haspopup="dialog" onClick={(event) => onClick(event.currentTarget)} className={className}>{content}</button>
+    : <article className={className}>{content}</article>;
+}
+
+function NetWorthDetailsDialog({ finance, currency, memberNames, origin, onClose }: { finance: HouseholdFinanceData; currency: string; memberNames: Map<string, string>; origin: DOMRect; onClose: () => void }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  const [flipped, setFlipped] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const reducedMotionRef = useRef(false);
+  const [target, setTarget] = useState({ width: 896, height: 720, viewportWidth: 1, viewportHeight: 1 });
+  const close = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    setFlipped(false);
+    if (reducedMotionRef.current) onCloseRef.current();
+  }, []);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updateMotionPreference = () => { reducedMotionRef.current = media.matches; };
+    const updateSize = () => setTarget({ width: Math.min(896, window.innerWidth - 32), height: Math.min(720, window.innerHeight - 32), viewportWidth: window.innerWidth, viewportHeight: window.innerHeight });
+    updateMotionPreference();
+    window.addEventListener("resize", updateSize);
+    media.addEventListener("change", updateMotionPreference);
+    const frame = window.requestAnimationFrame(() => {
+      updateSize();
+      setReady(true);
+    });
+    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("resize", updateSize); media.removeEventListener("change", updateMotionPreference); };
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
+    const frame = window.requestAnimationFrame(() => setFlipped(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [ready]);
+  const accounts = finance.accounts.filter((account) => !account.archived);
+  const assetsTotal = accounts.reduce((sum, account) => sum + account.balanceMinor, 0)
+    + finance.assets.reduce((sum, asset) => sum + asset.amountMinor, 0);
+  const liabilitiesTotal = finance.liabilities.reduce((sum, liability) => sum + liability.amountMinor, 0);
+  const netWorth = assetsTotal - liabilitiesTotal;
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        close();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])");
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [close]);
+  const memberName = (uid: string) => memberNames.get(uid) ?? "Household member";
+  const accountKind = (kind: FinancialAccount["kind"]) => kind === "retirement" ? "Retirement / 401(k)" : kind === "brokerage" ? "Brokerage" : "Cash / savings";
+
+  if (!ready) return null;
+
+  const originX = origin.left + origin.width / 2 - target.viewportWidth / 2;
+  const originY = origin.top + origin.height / 2 - target.viewportHeight / 2;
+  const flipTransform = flipped ? "translate(-50%, -50%) scale(1) rotateY(180deg)" : `translate(calc(-50% + ${originX}px), calc(-50% + ${originY}px)) scale(${origin.width / target.width}, ${origin.height / target.height}) rotateY(0deg)`;
+  return <div role="presentation" className="net-worth-flip-overlay fixed inset-0 z-[70] bg-slate-950/55 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+    <div className="net-worth-flip-shell" style={{ width: target.width, height: target.height, transform: flipTransform }} onTransitionEnd={(event) => { if (event.target === event.currentTarget && closing && !flipped) onCloseRef.current(); }}>
+    <div aria-hidden="true" className="net-worth-flip-front"><span className="text-sm font-semibold text-slate-600">Net Worth</span><span className="text-2xl font-bold text-slate-900">{formatMoney(netWorth, currency)}</span></div>
+    <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="net-worth-dialog-title" aria-describedby="net-worth-dialog-description" tabIndex={-1} className="net-worth-flip-back overflow-hidden rounded-3xl border border-white/70 bg-white shadow-2xl outline-none">
+      <header className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-teal-950 px-5 py-6 text-white sm:px-8 sm:py-8">
+        <div aria-hidden="true" className="absolute -right-8 -top-16 h-56 w-56 rounded-full border border-white/10 bg-teal-400/10 blur-2xl" />
+        <div className="relative flex items-start justify-between gap-4">
+          <div><p className="text-sm font-medium text-teal-200">Household balance sheet</p><h2 id="net-worth-dialog-title" className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">Net Worth Details</h2><p id="net-worth-dialog-description" className="mt-2 text-sm text-slate-300">Your household’s recorded assets minus liabilities.</p><p className="mt-5 text-3xl font-bold tracking-tight sm:text-4xl">{formatMoney(netWorth, currency)}</p><p className="mt-1 text-xs text-slate-300">Assets {formatMoney(assetsTotal, currency)} <span aria-hidden="true">−</span> liabilities {formatMoney(liabilitiesTotal, currency)}</p></div>
+          <button type="button" aria-label="Close net worth details" onClick={close} className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-xl text-white transition hover:rotate-90 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">×</button>
+        </div>
+      </header>
+      <div className="max-h-[min(66vh,38rem)] space-y-5 overflow-y-auto p-4 sm:p-6">
+        <section aria-labelledby="net-worth-assets-title" className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3"><div><h3 id="net-worth-assets-title" className="font-bold text-slate-900">Assets</h3><p className="mt-0.5 text-xs text-slate-500">Accounts and manually entered assets</p></div><p className="text-lg font-bold text-emerald-800">{formatMoney(assetsTotal, currency)}</p></div>
+          <ul className="mt-3 divide-y divide-emerald-100">{accounts.map((account) => <li key={`account-${account.id}`} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-800">{account.name}</p><p className="mt-0.5 text-xs text-slate-500">{accountKind(account.kind)} · {memberName(account.ownerUid)}</p></div><p className="shrink-0 text-sm font-semibold text-slate-900">{formatMoney(account.balanceMinor, currency)}</p></li>)}{finance.assets.map((asset) => <li key={`asset-${asset.id}`} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-800">{asset.name}</p><p className="mt-0.5 text-xs text-slate-500">Additional asset · {memberName(asset.ownerUid)}</p></div><p className="shrink-0 text-sm font-semibold text-slate-900">{formatMoney(asset.amountMinor, currency)}</p></li>)}</ul>
+          {!accounts.length && !finance.assets.length && <p className="mt-4 rounded-xl bg-white/80 p-4 text-sm text-slate-500">No assets have been recorded yet.</p>}
+        </section>
+        <section aria-labelledby="net-worth-liabilities-title" className="rounded-2xl border border-rose-100 bg-rose-50/40 p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3"><div><h3 id="net-worth-liabilities-title" className="font-bold text-slate-900">Liabilities</h3><p className="mt-0.5 text-xs text-slate-500">Manually entered household debts</p></div><p className="text-lg font-bold text-rose-800">{formatMoney(liabilitiesTotal, currency)}</p></div>
+          {finance.liabilities.length ? <ul className="mt-3 divide-y divide-rose-100">{finance.liabilities.map((liability) => <li key={liability.id} className="flex items-center justify-between gap-3 py-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-800">{liability.name}</p><p className="mt-0.5 text-xs text-slate-500">Debt · {memberName(liability.ownerUid)}</p></div><p className="shrink-0 text-sm font-semibold text-slate-900">−{formatMoney(liability.amountMinor, currency)}</p></li>)}</ul> : <p className="mt-4 rounded-xl bg-white/80 p-4 text-sm text-slate-500">No liabilities have been recorded.</p>}
+        </section>
+      </div>
+    </section>
+    </div>
+  </div>;
 }
 
 function percentChangeLabel(current: number, previous: number, period: string) {
@@ -780,39 +915,109 @@ function percentChangeLabel(current: number, previous: number, period: string) {
   return `${percent > 0 ? "↑" : "↓"} ${Math.abs(percent)}% ${percent > 0 ? "increase" : "decrease"} ${period}`;
 }
 
-type CashFlowMonth = { month: string; year: number; key: string; income: number; expenses: number };
+type CashFlowMonth = { month: string; year: number; key: string; income: number; expenses: number; categoryTotals: [string, number][] };
+type ChartRange = "3m" | "6m" | "1y" | "ytd";
 
-function CashFlowLineChart({ monthly, currency }: { monthly: CashFlowMonth[]; currency: string }) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+function ChartRangeControls({ value, onChange, label }: { value: ChartRange; onChange: (range: ChartRange) => void; label: string }) {
+  return <div role="group" aria-label={label} className="inline-flex shrink-0 rounded-lg border border-slate-200 bg-white p-0.5">
+    {([ ["3m", "3M"], ["6m", "6M"], ["1y", "1Y"], ["ytd", "YTD"] ] as const).map(([range, text]) => <button key={range} type="button" aria-pressed={value === range} onClick={() => onChange(range)} className={`rounded-md px-2 py-1.5 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${value === range ? "bg-teal-700 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}>{text}</button>)}
+  </div>;
+}
+
+function resolveCashFlowAnchorMonth(anchorMonth: string, transactions: FinancialTransaction[]) {
+  const latestTransactionMonth = [...transactions].sort((a, b) => b.date.localeCompare(a.date))[0]?.date.slice(0, 7);
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(anchorMonth) ? anchorMonth : latestTransactionMonth ?? "1970-01";
+}
+
+function chartRangeMonthCount(range: ChartRange, anchorMonth: string) {
+  if (range === "3m") return 3;
+  if (range === "6m") return 6;
+  if (range === "1y") return 12;
+  return Number(anchorMonth.slice(5, 7));
+}
+
+function buildCashFlowMonths(transactions: FinancialTransaction[], anchorMonth: string, count: number): CashFlowMonth[] {
+  const selectedAnchor = resolveCashFlowAnchorMonth(anchorMonth, transactions);
+  const [anchorYear, anchorMonthNumber] = selectedAnchor.split("-").map(Number);
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(anchorYear, anchorMonthNumber - count + index, 1);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    const monthTransactions = transactions.filter((transaction) => transaction.date.startsWith(`${key}-`));
+    const income = monthTransactions.filter((transaction) => transaction.type === "credit" && transaction.purpose === "income")
+      .reduce((sum, transaction) => sum + transaction.amountMinor, 0);
+    const spending = new Map<string, number>();
+    for (const transaction of monthTransactions) {
+      if (!isOrdinaryExpenseTransaction(transaction)) continue;
+      spending.set(transaction.category, (spending.get(transaction.category) ?? 0) + (transaction.type === "credit" ? -transaction.amountMinor : transaction.amountMinor));
+    }
+    const categoryTotals = [...spending.entries()].filter(([, amount]) => amount !== 0).sort((a, b) => b[1] - a[1]);
+    return {
+      month: date.toLocaleString(undefined, { month: "short" }),
+      year: date.getFullYear(),
+      key,
+      income,
+      expenses: categoryTotals.reduce((sum, [, amount]) => sum + amount, 0),
+      categoryTotals,
+    };
+  });
+}
+
+function CashFlowLineChart({ transactions, anchorMonth, currency, chartType = "line" }: { transactions: FinancialTransaction[]; anchorMonth: string; currency: string; chartType?: "line" | "bar" }) {
+  const [range, setRange] = useState<ChartRange>("6m");
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const activeIndex = hoveredIndex ?? selectedIndex;
+  const resolvedAnchorMonth = resolveCashFlowAnchorMonth(anchorMonth, transactions);
+  const monthly = buildCashFlowMonths(transactions, resolvedAnchorMonth, chartRangeMonthCount(range, resolvedAnchorMonth));
   const left = 42;
   const right = 700;
   const top = 18;
   const bottom = 174;
-  const minValue = Math.min(0, ...monthly.map((item) => item.income - item.expenses));
+  const minValue = Math.min(0, ...monthly.flatMap((item) => [item.income, item.expenses, item.income - item.expenses]));
   const maxValue = Math.max(1, ...monthly.flatMap((item) => [item.income, item.expenses, item.income - item.expenses]));
   const x = (index: number) => monthly.length < 2 ? (left + right) / 2 : left + index * (right - left) / (monthly.length - 1);
   const y = (value: number) => top + (maxValue - value) / (maxValue - minValue) * (bottom - top);
   const valueFor = (item: CashFlowMonth, key: "income" | "expenses" | "saved") => key === "saved" ? item.income - item.expenses : item[key];
   const line = (key: "income" | "expenses" | "saved") => monthly.map((item, index) => `${x(index)},${y(valueFor(item, key))}`).join(" ");
+  const barWidth = Math.min(14, Math.max(6, (right - left) / monthly.length * 0.16));
+  const barGap = Math.max(2, barWidth * 0.18);
+  const series = [
+    { key: "income", color: "#0f9f78" },
+    { key: "expenses", color: "#4388e8" },
+    { key: "saved", color: "#8b5cf6" },
+  ] as const;
 
   return <div className="mt-4 min-w-0">
-    <svg viewBox="0 0 720 220" role="group" aria-label="Monthly income and spending line chart" className="h-auto w-full overflow-visible">
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-medium text-slate-500">View period</p><ChartRangeControls value={range} onChange={setRange} label="Cash flow chart range" /></div>
+    <svg viewBox="0 0 720 220" role="group" aria-label={`Monthly income, spending, and saved amount ${chartType} chart`} aria-describedby="cash-flow-chart-detail" className="h-auto w-full overflow-visible">
       {[0, 1, 2, 3].map((tick) => {
         const value = minValue + (maxValue - minValue) * (3 - tick) / 3;
         const position = y(value);
         return <g key={tick}><line x1={left} x2={right} y1={position} y2={position} stroke="#e2e8f0" strokeDasharray="3 5" /><text x={left - 7} y={position + 4} textAnchor="end" className="fill-slate-400" fontSize="10">{formatMoney(value, currency)}</text></g>;
       })}
-      <polyline points={line("income")} fill="none" stroke="#0f9f78" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-      <polyline points={line("expenses")} fill="none" stroke="#4388e8" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-      <polyline points={line("saved")} fill="none" stroke="#8b5cf6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-      {monthly.map((item, index) => <g key={item.key} tabIndex={0} role="img" aria-label={`${item.month} ${item.year}: income ${formatMoney(item.income, currency)}, spent ${formatMoney(item.expenses, currency)}, saved ${formatMoney(item.income - item.expenses, currency)}`} onMouseEnter={() => setActiveIndex(index)} onMouseLeave={() => setActiveIndex(null)} onFocus={() => setActiveIndex(index)} onBlur={() => setActiveIndex(null)} className="cursor-default outline-none">
+      {monthly.map((item, index) => {
+        const spacing = monthly.length < 2 ? right - left : (right - left) / (monthly.length - 1);
+        return <rect key={`band-${item.key}`} x={Math.max(left, x(index) - spacing * 0.42)} y={top} width={Math.min(spacing * 0.84, right - Math.max(left, x(index) - spacing * 0.42))} height={bottom - top} rx="7" fill={activeIndex === index ? "#ccfbf1" : "transparent"} opacity={activeIndex === index ? "0.75" : "1"} className="transition-colors duration-200 motion-reduce:transition-none" pointerEvents="none" />;
+      })}
+      {monthly.map((item, index) => {
+        const spacing = monthly.length < 2 ? right - left : (right - left) / (monthly.length - 1);
+        const bandStart = Math.max(left, x(index) - spacing * 0.42);
+        const bandWidth = Math.min(spacing * 0.84, right - bandStart);
+        return <rect key={`target-${item.key}`} x={bandStart} y={top} width={bandWidth} height={bottom - top} rx="7" fill="transparent" tabIndex={0} role="button" aria-pressed={selectedIndex === index} aria-describedby="cash-flow-chart-detail" aria-label={`${item.month} ${item.year}: income ${formatMoney(item.income, currency)}, spent ${formatMoney(item.expenses, currency)}, saved ${formatMoney(item.income - item.expenses, currency)}. Activate to keep this month selected.`} onMouseEnter={() => setHoveredIndex(index)} onMouseLeave={() => setHoveredIndex(null)} onFocus={() => setHoveredIndex(index)} onBlur={() => setHoveredIndex(null)} onClick={() => setSelectedIndex((current) => current === index ? null : index)} onKeyDown={(event) => { if (event.key === "Escape") { setHoveredIndex(null); setSelectedIndex(null); (event.currentTarget as SVGRectElement).blur(); } else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedIndex((current) => current === index ? null : index); } }} className="cursor-pointer outline-none" />;
+      })}
+      {chartType === "line" ? series.map((item) => <polyline key={item.key} points={line(item.key)} fill="none" stroke={item.color} strokeWidth={activeIndex === null ? 3 : 4} strokeLinecap="round" strokeLinejoin="round" className="investment-chart-line" pointerEvents="none" />) : monthly.map((item, index) => <g key={`bars-${item.key}`} aria-hidden="true" pointerEvents="none">{series.map((itemSeries, seriesIndex) => {
+        const amount = valueFor(item, itemSeries.key);
+        const baseline = y(0);
+        const point = y(amount);
+        const groupOffset = (seriesIndex - 1) * (barWidth + barGap);
+        return <rect key={itemSeries.key} x={x(index) + groupOffset - barWidth / 2} y={Math.min(baseline, point)} width={barWidth} height={Math.max(1, Math.abs(baseline - point))} rx="2.5" fill={itemSeries.color} opacity={activeIndex === null || activeIndex === index ? 1 : 0.76} className="transition-opacity duration-200 motion-reduce:transition-none"><title>{item.month} {item.year} · {itemSeries.key === "income" ? "Income" : itemSeries.key === "expenses" ? "Expenses" : "Saved"}: {formatMoney(amount, currency)}</title></rect>;
+      })}</g>)}
+      {monthly.map((item, index) => <g key={item.key} aria-hidden="true" pointerEvents="none">
         <title>{`${item.month} ${item.year} · Income ${formatMoney(item.income, currency)} · Spent ${formatMoney(item.expenses, currency)} · Saved ${formatMoney(item.income - item.expenses, currency)}`}</title>
-        <circle cx={x(index)} cy={y(item.income)} r={activeIndex === index ? 6 : 4} fill="#0f9f78" stroke="white" strokeWidth="2" />
-        <circle cx={x(index)} cy={y(item.expenses)} r={activeIndex === index ? 6 : 4} fill="#4388e8" stroke="white" strokeWidth="2" />
-        <circle cx={x(index)} cy={y(item.income - item.expenses)} r={activeIndex === index ? 6 : 4} fill="#8b5cf6" stroke="white" strokeWidth="2" />
-        <text x={x(index)} y="198" textAnchor="middle" className="fill-slate-500" fontSize="10">{item.month}</text>
+        {chartType === "line" && <><circle cx={x(index)} cy={y(item.income)} r={activeIndex === index ? 6 : 4} fill="#0f9f78" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /><circle cx={x(index)} cy={y(item.expenses)} r={activeIndex === index ? 6 : 4} fill="#4388e8" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /><circle cx={x(index)} cy={y(item.income - item.expenses)} r={activeIndex === index ? 6 : 4} fill="#8b5cf6" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /></>}
+        <text x={x(index)} y="198" textAnchor="middle" className={`transition-colors duration-200 ${activeIndex === index ? "fill-teal-800 font-semibold" : "fill-slate-500"}`} fontSize="10">{item.month}</text>
       </g>)}
-    </svg>{activeIndex === null ? <p className="min-h-5 text-xs text-slate-400">Hover or focus a month to see the values.</p> : <p aria-live="polite" className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold">{monthly[activeIndex].month} {monthly[activeIndex].year}:</span> Income {formatMoney(monthly[activeIndex].income, currency)} · Spent {formatMoney(monthly[activeIndex].expenses, currency)} · Saved {formatMoney(monthly[activeIndex].income - monthly[activeIndex].expenses, currency)}</p>}
+    </svg>{activeIndex === null ? <p id="cash-flow-chart-detail" className="min-h-5 text-xs text-slate-400">Hover or focus a month to see its income, spending, and category breakdown. Select a month to keep it open.</p> : <div id="cash-flow-chart-detail" aria-live="polite" className="grid gap-4 rounded-xl border border-teal-100 bg-teal-50/70 p-4 lg:grid-cols-[0.8fr_1.2fr]"><div><p className="text-sm font-semibold text-slate-800">{monthly[activeIndex].month} {monthly[activeIndex].year} breakdown</p><p className="mt-1 text-xs text-slate-600">Household totals for this month</p><div className="mt-3 space-y-2 text-sm">{(["income", "expenses", "saved"] as const).map((key) => <p key={key} className="flex items-center gap-2"><i aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${key === "income" ? "bg-emerald-600" : key === "expenses" ? "bg-blue-500" : "bg-violet-500"}`} /><span className="text-slate-700">{key === "income" ? "Income" : key === "expenses" ? "Expenses" : "Saved"}</span><strong className="ml-auto text-slate-900">{formatMoney(key === "income" ? monthly[activeIndex].income : key === "expenses" ? monthly[activeIndex].expenses : monthly[activeIndex].income - monthly[activeIndex].expenses, currency)}</strong></p>)}</div></div><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spending by category <span className="font-normal normal-case tracking-normal">· net of refunds</span></p>{monthly[activeIndex].categoryTotals.length ? <ul className="mt-2 grid gap-x-4 sm:grid-cols-2">{monthly[activeIndex].categoryTotals.map(([category, amount], index) => <li key={category} className="flex min-w-0 items-center justify-between gap-2 border-t border-teal-100/80 py-2 text-sm"><span className="flex min-w-0 items-center gap-2"><i aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"][index % 6] }} /><span className="truncate text-slate-700">{category === "MISC" ? "Miscellaneous" : category}</span></span><strong className="shrink-0 text-slate-900">{formatMoney(amount, currency)}</strong></li>)}</ul> : <p className="mt-2 rounded-lg bg-white/70 p-3 text-xs text-slate-500">No expenses for this month.</p>}</div></div>}
   </div>;
 }
 
@@ -842,12 +1047,105 @@ function PlusActionButton({ label, onClick, actions, expanded = false }: { label
     <button type="button" aria-label={label} aria-haspopup={hasMenu ? "menu" : undefined} aria-expanded={hasMenu ? open : expanded} title={label} onClick={() => hasMenu ? setOpen((value) => !value) : onClick?.()} className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-100 text-teal-800 shadow-sm transition hover:scale-105 hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 motion-reduce:transform-none">
       <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={`h-5 w-5 transition-transform ${open || expanded ? "rotate-45" : ""}`}><path d="M12 5v14M5 12h14" /></svg>
     </button>
-    {open && actions && <div role="menu" aria-label={label} className="absolute right-0 top-full z-30 mt-2 min-w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">{actions.map((action) => <button key={action.label} type="button" role="menuitem" onClick={() => { setOpen(false); action.onSelect(); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{action.label}</button>)}</div>}
+    {open && actions && <div role="menu" aria-label={label} className="motion-pop-in absolute right-0 top-full z-30 mt-2 min-w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">{actions.map((action) => <button key={action.label} type="button" role="menuitem" onClick={() => { setOpen(false); action.onSelect(); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{action.label}</button>)}</div>}
   </div>;
 }
 
-function Dashboard({ finance, month, todayMonth, snapshotHistory, setMonth, currency, profileName, onOpen, onRequestDelete, onAddPayment, onMarkPaymentPaid, onDeletePayment }: {
-  finance: HouseholdFinanceData; month: string; todayMonth: string; snapshotHistory: Record<string, AccountSnapshot[]>; setMonth: (month: string) => void; currency: string; profileName: string; onOpen: (section: Section) => void; onRequestDelete: (request: DeleteRequest) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey" | "startDate" | "category">) => Promise<void>; onMarkPaymentPaid: (id: string, dueDate: string) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
+function MonthlyMetricDetailsDialog({ title, value, month, currency, transactions, finance, memberNames, categoryTotals, origin, onClose }: {
+  title: string;
+  value: number;
+  month: string;
+  currency: string;
+  transactions: FinancialTransaction[];
+  finance: HouseholdFinanceData;
+  memberNames: Map<string, string>;
+  categoryTotals?: [string, number][];
+  origin: DOMRect;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  const closingRef = useRef(false);
+  const reducedMotionRef = useRef(false);
+  const [flipped, setFlipped] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [target, setTarget] = useState({ width: 896, height: 720, viewportWidth: 1, viewportHeight: 1 });
+  const close = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    setFlipped(false);
+    if (reducedMotionRef.current) onCloseRef.current();
+  }, []);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updateMotionPreference = () => { reducedMotionRef.current = media.matches; };
+    const updateSize = () => setTarget({ width: Math.min(896, window.innerWidth - 32), height: Math.min(720, window.innerHeight - 32), viewportWidth: window.innerWidth, viewportHeight: window.innerHeight });
+    updateMotionPreference();
+    window.addEventListener("resize", updateSize);
+    media.addEventListener("change", updateMotionPreference);
+    const frame = window.requestAnimationFrame(() => { updateSize(); setReady(true); });
+    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("resize", updateSize); media.removeEventListener("change", updateMotionPreference); };
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
+    const frame = window.requestAnimationFrame(() => setFlipped(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [ready]);
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { close(); return; }
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])");
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener("keydown", onKeyDown); previouslyFocused?.focus(); };
+  }, [close]);
+  useEffect(() => { if (ready) dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus(); }, [ready]);
+  if (!ready) return null;
+
+  const monthLabel = new Date(`${month}-15T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const originX = origin.left + origin.width / 2 - target.viewportWidth / 2;
+  const originY = origin.top + origin.height / 2 - target.viewportHeight / 2;
+  const transform = flipped
+    ? "translate(-50%, -50%) scale(1) rotateY(180deg)"
+    : `translate(calc(-50% + ${originX}px), calc(-50% + ${originY}px)) scale(${origin.width / target.width}, ${origin.height / target.height}) rotateY(0deg)`;
+  return <div role="presentation" className="net-worth-flip-overlay fixed inset-0 z-[70] bg-slate-950/55 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+    <div className="net-worth-flip-shell" style={{ width: target.width, height: target.height, transform }} onTransitionEnd={(event) => { if (event.target === event.currentTarget && closing && !flipped) onCloseRef.current(); }}>
+      <div aria-hidden="true" className="net-worth-flip-front"><span className="text-sm font-semibold text-slate-600">{title}</span><span className="text-2xl font-bold text-slate-900">{formatMoney(value, currency)}</span></div>
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="monthly-metric-title" className="net-worth-flip-back overflow-hidden rounded-3xl border border-white/70 bg-white shadow-2xl outline-none">
+        <header className="flex items-start justify-between gap-4 bg-gradient-to-br from-slate-950 via-slate-900 to-teal-950 px-5 py-6 text-white sm:px-8 sm:py-8">
+          <div><p className="text-sm font-medium text-teal-200">{categoryTotals ? "Monthly category breakdown" : "Monthly transaction details"}</p><h2 id="monthly-metric-title" className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">{title}</h2><p className="mt-2 text-sm text-slate-300">{monthLabel} · household activity</p><p className="mt-5 text-3xl font-bold tracking-tight sm:text-4xl">{formatMoney(value, currency)}</p><p className="mt-1 text-xs text-slate-300">{categoryTotals ? `${categoryTotals.length} spending ${categoryTotals.length === 1 ? "category" : "categories"}` : `${transactions.length} matching ${transactions.length === 1 ? "transaction" : "transactions"}`}</p></div>
+          <button type="button" aria-label={`Close ${title} details`} onClick={close} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-xl text-white transition hover:rotate-90 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">×</button>
+        </header>
+        <div className="h-[calc(100%-11rem)] overflow-y-auto p-4 sm:p-6">
+          {categoryTotals ? categoryTotals.length ? <ul className="divide-y divide-slate-100">{categoryTotals.map(([category, amount], index) => <li key={category} className="flex items-center justify-between gap-3 py-4"><div className="flex min-w-0 items-center gap-3"><i aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"][index % 6] }} /><span className="truncate text-sm font-semibold text-slate-900">{category === "MISC" ? "Miscellaneous" : category}</span></div><p className={`shrink-0 text-sm font-semibold ${amount < 0 ? "text-emerald-700" : "text-slate-900"}`}>{amount < 0 ? "+" : ""}{formatMoney(Math.abs(amount), currency)}</p></li>)}</ul> : <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No spending by category for {monthLabel}.</p> : transactions.length ? <ul className="divide-y divide-slate-100">{transactions.map((transaction) => {
+            const isRefund = transaction.type === "credit" && transaction.purpose === "ordinary";
+            const account = finance.accounts.find((item) => item.id === transaction.accountId);
+            const ownerName = memberNames.get(transaction.ownerUid) ?? "Household member";
+            return <li key={transaction.id} className="flex items-center justify-between gap-3 py-3">
+              <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{transaction.description || transaction.category}</p><p className="mt-0.5 truncate text-xs text-slate-500">{new Date(`${transaction.date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · {transaction.category} · {ownerName}{account ? ` · ${account.name}` : ""}</p></div>
+              <p className={`shrink-0 text-sm font-semibold ${isRefund ? "text-emerald-700" : title.startsWith("Income") ? "text-emerald-700" : "text-slate-900"}`}>{isRefund ? "+" : ""}{formatMoney(transaction.amountMinor, currency)}</p>
+            </li>;
+          })}</ul> : <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No matching transactions for {monthLabel}.</p>}
+        </div>
+      </section>
+    </div>
+  </div>;
+}
+
+function Dashboard({ finance, month, todayMonth, snapshotHistory, memberNames, setMonth, currency, profileName, onOpen, onRequestDelete, onAddPayment, onMarkPaymentPaid, onUnmarkPaymentPaid, onDeletePayment }: {
+  finance: HouseholdFinanceData; month: string; todayMonth: string; snapshotHistory: Record<string, AccountSnapshot[]>; memberNames: Map<string, string>; setMonth: (month: string) => void; currency: string; profileName: string; onOpen: (section: Section) => void; onRequestDelete: (request: DeleteRequest) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey" | "startDate" | "category">) => Promise<void>; onMarkPaymentPaid: (id: string, dueDate: string) => Promise<void>; onUnmarkPaymentPaid: (id: string, dueDate: string) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
 }) {
   const selectedMonth = month || "1970-01";
   const financialSummary = calculateFinanceSummary(finance, selectedMonth);
@@ -861,7 +1159,9 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, setMonth, curr
   const [savingPayment, setSavingPayment] = useState(false);
   const [markingPayment, setMarkingPayment] = useState<string | null>(null);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
-  const [cashFlowRange, setCashFlowRange] = useState<3 | 6 | 12>(6);
+  const [showNetWorthDetails, setShowNetWorthDetails] = useState(false);
+  const [netWorthOrigin, setNetWorthOrigin] = useState<DOMRect | null>(null);
+  const [monthlyMetricDetail, setMonthlyMetricDetail] = useState<"income" | "spent" | null>(null);
   const firstName = profileName.trim().split(/\s+/)[0] || "there";
   const [greeting, setGreeting] = useState("");
   useEffect(() => {
@@ -897,22 +1197,6 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, setMonth, curr
   };
   const formatDate = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   const monthTransactions = finance.transactions.filter((item) => item.date.startsWith(`${selectedMonth}-`));
-  const monthly = Array.from({ length: cashFlowRange }, (_, index) => {
-    const date = new Date(year, monthNumber - cashFlowRange + index, 1);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    const transactions = finance.transactions.filter((item) => item.date.startsWith(`${key}-`));
-    const income = transactions.filter((item) => item.type === "credit" && item.purpose === "income")
-      .reduce((sum, item) => sum + item.amountMinor, 0);
-    const expenses = transactions.filter(isOrdinaryExpenseTransaction)
-      .reduce((sum, item) => sum + (item.type === "credit" ? -item.amountMinor : item.amountMinor), 0);
-    return {
-      month: date.toLocaleString(undefined, { month: "short" }),
-      year: date.getFullYear(),
-      key,
-      income,
-      expenses,
-    };
-  });
   const spendingByCategory = [...monthTransactions.reduce((totals, item) => {
     if (!isOrdinaryExpenseTransaction(item)) return totals;
     totals.set(item.category, (totals.get(item.category) ?? 0) + (item.type === "credit" ? -item.amountMinor : item.amountMinor));
@@ -1011,19 +1295,19 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, setMonth, curr
 
     <div className="space-y-6">
     <section aria-label="Monthly summary" className="grid gap-3 sm:grid-cols-3">
-      <MetricCard title="Net Worth" value={formatMoney(financialSummary.netWorthMinor, currency)} detail={canCompareNetWorth ? percentChangeLabel(currentMonthNetWorth, previousMonthNetWorth, "vs last month") : "Monthly history unavailable"} accent="blue" note={`${formatMoney(financialSummary.assetsMinor, currency)} assets · ${formatMoney(financialSummary.liabilitiesMinor, currency)} liabilities`} icon="netWorth" />
-      <MetricCard title="Income This Month" value={formatMoney(financialSummary.incomeMinor, currency)} detail={percentChangeLabel(financialSummary.incomeMinor, previousMonthSummary.incomeMinor, "vs last month")} accent="emerald" icon="income" />
-      <MetricCard title="Spent This Month" value={formatMoney(financialSummary.ordinaryExpensesMinor, currency)} detail={percentChangeLabel(financialSummary.ordinaryExpensesMinor, previousMonthSummary.ordinaryExpensesMinor, "vs last month")} accent="amber" note="Net of refunds; transfers and card payments are excluded." icon="expenses" />
+      <MetricCard title="Net Worth" value={formatMoney(financialSummary.netWorthMinor, currency)} detail={canCompareNetWorth ? percentChangeLabel(currentMonthNetWorth, previousMonthNetWorth, "vs last month") : "Monthly history unavailable"} accent="blue" icon="netWorth" onClick={(trigger) => { setNetWorthOrigin(trigger.getBoundingClientRect()); setShowNetWorthDetails(true); }} />
+      <MetricCard title="Income This Month" value={formatMoney(financialSummary.incomeMinor, currency)} detail={percentChangeLabel(financialSummary.incomeMinor, previousMonthSummary.incomeMinor, "vs last month")} accent="emerald" icon="income" onClick={(trigger) => { setNetWorthOrigin(trigger.getBoundingClientRect()); setMonthlyMetricDetail("income"); }} />
+      <MetricCard title="Spent This Month" value={formatMoney(financialSummary.ordinaryExpensesMinor, currency)} detail={percentChangeLabel(financialSummary.ordinaryExpensesMinor, previousMonthSummary.ordinaryExpensesMinor, "vs last month")} accent="amber" icon="expenses" onClick={(trigger) => { setNetWorthOrigin(trigger.getBoundingClientRect()); setMonthlyMetricDetail("spent"); }} />
     </section>
 
     <div className="grid min-w-0 gap-5 xl:grid-cols-2">
       <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex items-center gap-3"><DashboardSectionIcon name="cashFlow" /><div><h2 className="font-bold">Cash Flow</h2><p className="mt-1 text-sm text-slate-500">Income, ordinary spending, and saved amount by month</p></div></div><div className="flex flex-wrap items-center gap-3"><div className="flex flex-wrap gap-3 text-xs text-slate-600"><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-emerald-600" />Income</span><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-blue-500" />Spent</span><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-violet-500" />Saved</span></div><div role="group" aria-label="Cash flow time range" className="inline-flex rounded-lg border border-slate-200 p-0.5">{([3, 6, 12] as const).map((range) => <button key={range} type="button" aria-pressed={cashFlowRange === range} onClick={() => setCashFlowRange(range)} className={`rounded-md px-2 py-1 text-xs font-medium ${cashFlowRange === range ? "bg-teal-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}>{range === 12 ? "1Y" : `${range}M`}</button>)}</div></div></div>
-        {monthly.every((item) => item.income === 0 && item.expenses === 0) ? <p className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No income or ordinary spending recorded in this period.</p> : <CashFlowLineChart monthly={monthly} currency={currency} />}
+        <div className="flex items-center gap-3"><DashboardSectionIcon name="cashFlow" /><div><h2 className="font-bold">Cash Flow</h2><p className="mt-1 text-sm text-slate-500">Income, expenses, and saved amount by month</p></div></div>
+        <CashFlowLineChart transactions={finance.transactions} anchorMonth={selectedMonth} currency={currency} />
       </section>
 
       <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center gap-3"><DashboardSectionIcon name="category" /><div><h2 className="font-bold">Spending by Category</h2><p className="mt-1 text-sm text-slate-500">Ordinary expenses for {selectedMonth}; refunds reduce category totals.</p></div></div>
+        <div className="flex items-center gap-3"><DashboardSectionIcon name="category" /><div><h2 className="font-bold">Spending by Category</h2><p className="mt-1 text-sm text-slate-500">Expenses for {selectedMonth}; refunds reduce category totals.</p></div></div>
         {spendingByCategory.length ? <div className="mt-5 grid gap-5 sm:grid-cols-[minmax(150px,0.9fr)_minmax(0,1.1fr)] sm:items-center"><div className="relative mx-auto aspect-square w-full max-w-[220px]"><svg viewBox="0 0 160 160" role="img" aria-label={`Spending total ${formatMoney(totalCategorySpend, currency)} by category`} className="h-full w-full -rotate-90">{visibleCategories.map(([category, amount], index) => {
           const circumference = 2 * Math.PI * 58;
           const length = positiveCategorySpend && amount > 0 ? amount / positiveCategorySpend * circumference : 0;
@@ -1032,15 +1316,15 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, setMonth, curr
         })}</svg><div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center"><span className="text-lg font-bold text-slate-900">{formatMoney(totalCategorySpend, currency)}</span><span className="text-xs text-slate-500">Total spent</span></div></div><div className="space-y-3">{visibleCategories.map(([category, amount], index) => {
           const percent = totalCategorySpend > 0 ? amount / totalCategorySpend * 100 : 0;
           return <div key={category} className="flex min-w-0 items-center justify-between gap-2 text-sm"><span className="flex min-w-0 items-center gap-2"><i className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryPalette[index % categoryPalette.length] }} /><span className="truncate font-medium text-slate-800">{category === "MISC" ? "Miscellaneous" : category}</span></span><span className="shrink-0 text-right text-slate-600">{formatMoney(amount, currency)} <span className="text-slate-400">{Math.round(percent)}%</span></span></div>;
-        })}</div></div> : <p className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No ordinary spending recorded for this month.</p>}
+        })}</div></div> : <p className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No expenses recorded for this month.</p>}
       </section>
     </div>
 
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><DashboardSectionIcon name="bills" /><div><h2 className="font-bold">Upcoming Bills</h2><p className="mt-1 text-sm text-slate-500">Scheduled payments for {new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}. Marking one paid adds an expense transaction.</p></div></div><PlusActionButton label={showPaymentForm ? "Close bill form" : "Add bill"} expanded={showPaymentForm} onClick={() => { if (!showPaymentForm && !paymentStartDate) setPaymentStartDate(`${selectedMonth}-01`); setShowPaymentForm((visible) => !visible); setPaymentError(""); }} /></div>
       {paymentError && !showPaymentForm && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{paymentError}</p>}
-      {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-b border-slate-100 pb-5 sm:grid-cols-2 xl:grid-cols-6"><input autoFocus required disabled={savingPayment} maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment name" aria-label="Bill or payment name" className={inputClass} /><input required disabled={savingPayment} inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} /><select disabled={savingPayment} value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value as typeof paymentFrequency)} aria-label="Payment frequency" className={inputClass}><option value="monthly">Monthly</option><option value="biweekly">Every 2 weeks</option><option value="every6months">Every 6 months</option><option value="once">One time</option></select><input required disabled={savingPayment} type="date" value={paymentStartDate} onChange={(event) => setPaymentStartDate(event.target.value)} aria-label="First due date" className={inputClass} /><select required disabled={savingPayment} value={paymentCategory} onChange={(event) => setPaymentCategory(event.target.value)} aria-label="Expense category" className={inputClass}>{BUDGET_CATEGORIES.map((category) => <option key={category} value={category}>{category === "MISC" ? "Miscellaneous" : category}</option>)}</select><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Save bill"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2 xl:col-span-6">{paymentError}</p>}</form>}
-      {paymentDates.length ? <ul className="mt-4 divide-y divide-slate-100">{paymentDates.map((payment) => <li key={payment.occurrenceId} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><button type="button" aria-label={`${payment.paid ? "Paid" : "Mark paid"}: ${payment.name} due ${formatDate(payment.dueDate)}`} aria-pressed={payment.paid} disabled={payment.paid || markingPayment !== null} onClick={() => void markPaymentPaid(payment.id, payment.dueDate)} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 disabled:cursor-default ${payment.paid ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 text-transparent hover:border-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"}`}><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="m4 10 4 4 8-8" /></svg></button><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{payment.name}</p><p className="mt-1 text-xs text-slate-500">Due {formatDate(payment.dueDate)} · {payment.frequency === "biweekly" ? "Every 2 weeks" : payment.frequency === "every6months" ? "Every 6 months" : payment.frequency === "once" ? "One time" : "Monthly"} · {payment.category === "MISC" ? "Miscellaneous" : payment.category ?? "Groceries"}</p></div></div><div className="flex items-center gap-3"><span className="text-sm font-semibold text-slate-800">{formatMoney(payment.amountMinor, currency)}</span><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${payment.paid ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-800"}`}>{payment.paid ? "Paid · added to transactions" : "Scheduled"}</span><EntityActions label={payment.name} onDelete={() => onRequestDelete({ recordLabel: payment.name, description: "This will remove the payment from your household calendar.", onConfirm: () => onDeletePayment(payment.id) })} deleteLabel="Remove" /></div></li>)}</ul> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No bills scheduled for this month. Add a bill to keep it on the household calendar.</p>}
+      {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-b border-slate-100 pb-5 sm:grid-cols-2 xl:grid-cols-6"><input autoFocus required disabled={savingPayment} maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment name" aria-label="Bill or payment name" className={inputClass} /><input required disabled={savingPayment} inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} /><select disabled={savingPayment} value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value as typeof paymentFrequency)} aria-label="Payment frequency" className={inputClass}>{sortOptionsAlphabetically([{ value: "biweekly", label: "Every 2 weeks" }, { value: "every6months", label: "Every 6 months" }, { value: "monthly", label: "Monthly" }, { value: "once", label: "One time" }], (option) => option.label).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><input required disabled={savingPayment} type="date" value={paymentStartDate} onChange={(event) => setPaymentStartDate(event.target.value)} aria-label="First due date" className={inputClass} /><select required disabled={savingPayment} value={paymentCategory} onChange={(event) => setPaymentCategory(event.target.value)} aria-label="Expense category" className={inputClass}>{sortOptionsAlphabetically(BUDGET_CATEGORIES, categoryOptionLabel).map((category) => <option key={category} value={category}>{categoryOptionLabel(category)}</option>)}</select><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Save bill"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2 xl:col-span-6">{paymentError}</p>}</form>}
+      {paymentDates.length ? <ul className="mt-4 divide-y divide-slate-100">{paymentDates.map((payment) => <li key={payment.occurrenceId} className="flex flex-wrap items-center justify-between gap-3 py-3 transition-colors duration-300"><div className="flex min-w-0 items-center gap-3"><button type="button" aria-label={`${payment.paid ? "Undo paid status" : "Mark paid"}: ${payment.name} due ${formatDate(payment.dueDate)}`} aria-pressed={payment.paid} disabled={markingPayment !== null} onClick={() => payment.paid ? onRequestDelete({ recordLabel: payment.name, title: `Undo ${payment.name} payment?`, confirmLabel: "Undo payment", description: "This removes the expense transaction created for this bill occurrence and marks the bill unpaid.", onConfirm: () => onUnmarkPaymentPaid(payment.id, payment.dueDate) }) : void markPaymentPaid(payment.id, payment.dueDate)} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 disabled:cursor-wait disabled:opacity-60 ${payment.paid ? "border-emerald-600 bg-emerald-600 text-white hover:border-rose-500 hover:bg-rose-50 hover:text-rose-700" : "border-slate-300 text-transparent hover:border-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"}`}><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 transition-transform duration-200 ${payment.paid ? "scale-100" : "scale-75"}`}><path d="m4 10 4 4 8-8" /></svg></button><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{payment.name}</p><p className="mt-1 text-xs text-slate-500">Due {formatDate(payment.dueDate)} · {payment.frequency === "biweekly" ? "Every 2 weeks" : payment.frequency === "every6months" ? "Every 6 months" : payment.frequency === "once" ? "One time" : "Monthly"} · {payment.category === "MISC" ? "Miscellaneous" : payment.category ?? "Groceries"}</p></div></div><div className="flex items-center gap-3"><span className="text-sm font-semibold text-slate-800">{formatMoney(payment.amountMinor, currency)}</span><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${payment.paid ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-800"}`}>{payment.paid ? "Paid · added to transactions" : "Scheduled"}</span><EntityActions label={payment.name} onDelete={() => onRequestDelete({ recordLabel: payment.name, description: "This will remove the payment from your household calendar.", onConfirm: () => onDeletePayment(payment.id) })} deleteLabel="Remove" /></div></li>)}</ul> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No bills scheduled for this month. Add a bill to keep it on the household calendar.</p>}
     </section>
 
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1053,13 +1337,15 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, setMonth, curr
       })}</ul></> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No transactions have been recorded yet.</p>}
     </section>
     </div>
+    {showNetWorthDetails && netWorthOrigin && <NetWorthDetailsDialog finance={finance} currency={currency} memberNames={memberNames} origin={netWorthOrigin} onClose={() => setShowNetWorthDetails(false)} />}
+    {monthlyMetricDetail && netWorthOrigin && <MonthlyMetricDetailsDialog title={monthlyMetricDetail === "income" ? "Income This Month" : "Spent This Month"} value={monthlyMetricDetail === "income" ? financialSummary.incomeMinor : financialSummary.ordinaryExpensesMinor} month={selectedMonth} currency={currency} transactions={monthTransactions.filter((item) => monthlyMetricDetail === "income" ? item.type === "credit" && item.purpose === "income" : isOrdinaryExpenseTransaction(item))} finance={finance} memberNames={memberNames} categoryTotals={monthlyMetricDetail === "spent" ? spendingByCategory : undefined} origin={netWorthOrigin} onClose={() => setMonthlyMetricDetail(null)} />}
   </div>;
 }
 
 function financeMemberOptions(names: Map<string, string>, currentUid: string) {
   const entries = [...names.entries()];
   if (!entries.some(([id]) => id === currentUid)) entries.push([currentUid, "You"]);
-  return entries.map(([id, name]) => <option key={id} value={id}>{name}</option>);
+  return sortOptionsAlphabetically(entries, ([, name]) => name).map(([id, name]) => <option key={id} value={id}>{name}</option>);
 }
 
 function PaginationControls({ page, pageCount, total, pageSize, label, onPageChange }: {
@@ -1084,9 +1370,18 @@ function PaginationControls({ page, pageCount, total, pageSize, label, onPageCha
   </nav>;
 }
 
-function TransactionsSection({ finance, currency, householdId, uid, memberNames, filter, setFilter, typeFilter, setTypeFilter, onSave, onDelete, onRequestDelete, onImportComplete, editing, setEditing }: {
+function TransactionFilterField({ label, children }: { label: string; children: ReactNode }) {
+  const hasChevron = label === "Type" || label === "Category";
+  return <label className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 transition focus-within:border-teal-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-100">
+    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+    <span className="relative block min-w-0">{children}{hasChevron && <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="pointer-events-none absolute right-0 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"><path d="m5 7 5 5 5-5" /></svg>}</span>
+  </label>;
+}
+
+function TransactionsSection({ finance, currency, chartMonth, householdId, uid, memberNames, filter, setFilter, typeFilter, setTypeFilter, onSave, onDelete, onRequestDelete, onImportComplete, editing, setEditing }: {
   finance: HouseholdFinanceData;
   currency: HouseholdCurrency;
+  chartMonth: string;
   householdId: string;
   uid: string;
   memberNames: Map<string, string>;
@@ -1105,6 +1400,9 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
   const [showEditor, setShowEditor] = useState(Boolean(editing));
   const [transactionPage, setTransactionPage] = useState(1);
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
   const [saving, setSaving] = useState(false);
   const [type, setType] = useState<FinancialTransaction["type"]>("debit");
   const [category, setCategory] = useState("");
@@ -1179,8 +1477,14 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
   }
 
   const normalizedFilter = filter.trim().toLowerCase();
-  const transactionCategories = [...new Set(finance.transactions.map((item) => item.category))].sort((a, b) => a.localeCompare(b));
+  const invalidDateRange = Boolean(dateFrom && dateTo && dateFrom > dateTo);
+  const activeFilterCount = Number(typeFilter !== "all") + Number(categoryFilter !== "all") + Number(Boolean(dateFrom)) + Number(Boolean(dateTo));
+  const transactionCategories = sortOptionsAlphabetically([...new Set(finance.transactions.map((item) => item.category))], categoryOptionLabel);
+  const eligibleAccounts = sortOptionsAlphabetically(finance.accounts.filter((item) => !item.archived), (item) => `${memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · ${item.name}`);
+  const destinationAccounts = sortOptionsAlphabetically(eligibleAccounts.filter((item) => item.kind === (transferDestination === "brokerage" ? "brokerage" : transferDestination === "retirement" ? "retirement" : transferDestination === "cash" ? "savings" : "")), (item) => `${memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · ${item.name}`);
   const rows = finance.transactions
+    .filter((item) => !dateFrom || item.date >= dateFrom)
+    .filter((item) => !dateTo || item.date <= dateTo)
     .filter((item) => typeFilter === "all" || item.type === typeFilter)
     .filter((item) => categoryFilter === "all" || item.category === categoryFilter)
     .filter((item) => {
@@ -1190,6 +1494,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
       const searchable = `${item.category} ${item.description} ${item.date} ${kind} ${owner} ${formatMoney(item.amountMinor, currency)}`;
       return searchable.toLowerCase().includes(normalizedFilter);
     })
+    .filter(() => !invalidDateRange)
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.toMillis() - a.createdAt.toMillis());
   const transactionPageCount = Math.max(1, Math.ceil(rows.length / TRANSACTION_PAGE_SIZE));
   const safeTransactionPage = Math.min(transactionPage, transactionPageCount);
@@ -1213,7 +1518,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
     </div>
     {showImport && <TransactionImportFlow householdId={householdId} currency={currency} transactions={finance.transactions} onImported={onImportComplete} onClose={() => setShowImport(false)} />}
     <div className={`grid gap-6 ${showEditor ? "xl:grid-cols-[1fr_1.3fr]" : ""}`}>
-      {showEditor && <section id="transaction-editor" ref={editorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
+      {showEditor && <section id="transaction-editor" ref={editorRef} className="motion-panel-in edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-center gap-2"><span className="rounded-lg bg-emerald-50 p-2 text-emerald-700"><WorkspaceIcon section="Transactions" /></span><h2 className="font-bold">{editing ? "Edit transaction" : "Add a transaction"}</h2></div>
         <p className="mt-1 text-xs text-slate-500">Paycheck allocations increase the selected investment account. Record paycheck income separately.</p>
         <form onSubmit={submit} className="mt-4 space-y-3">
@@ -1225,9 +1530,11 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
                 if (nextType === "transfer") setShowTransferDialog(true);
                 else { setTransferDestination(null); setShowTransferDialog(false); }
               }} className={`${inputClass} mt-1`}>
-                <option value="debit">Expense</option>
-                <option value="credit">{editing?.type === "credit" && editing.purpose === "ordinary" ? "Refund" : "Income"}</option>
-                <option value="transfer">Paycheck allocation</option>
+                {sortOptionsAlphabetically([
+                  { value: "debit" as const, label: "Expense" },
+                  { value: "credit" as const, label: editing?.type === "credit" && editing.purpose === "ordinary" ? "Refund" : "Income" },
+                  { value: "transfer" as const, label: "Paycheck allocation" },
+                ], (option) => option.label).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
           </div>
@@ -1236,7 +1543,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             <select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}>
               <option value="" disabled>Choose a category</option>
               {editing?.category && !(TRANSACTION_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{editing.category} (existing)</option>}
-              {TRANSACTION_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
+              {sortOptionsAlphabetically(TRANSACTION_CATEGORIES, categoryOptionLabel).map((item) => <option key={item} value={item}>{categoryOptionLabel(item)}</option>)}
             </select>
           </label>}
           <div>
@@ -1266,7 +1573,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             <label className="block text-sm font-medium">Add to investment account
               <select required value={accountId} onChange={(event) => setAccountId(event.target.value)} className={`${inputClass} mt-1`}>
                 <option value="">Choose a destination account</option>
-                {finance.accounts.filter((item) => !item.archived && item.kind === (transferDestination === "brokerage" ? "brokerage" : transferDestination === "retirement" ? "retirement" : transferDestination === "cash" ? "savings" : "")).map((item) => <option key={item.id} value={item.id}>{memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · {item.name} · current balance {formatMoney(item.balanceMinor, currency)}</option>)}
+                {destinationAccounts.map((item) => <option key={item.id} value={item.id}>{memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · {item.name} · current balance {formatMoney(item.balanceMinor, currency)}</option>)}
               </select>
             </label>
           </div> : <div>
@@ -1279,7 +1586,7 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             {showLinkedAccount && <label id="linked-account-field" className="mt-2 block text-sm font-medium">Linked account (optional)
               <select value={accountId} onChange={(event) => setAccountId(event.target.value)} className={`${inputClass} mt-1`}>
                 <option value="">No linked account</option>
-                {finance.accounts.filter((item) => !item.archived).map((item) => <option key={item.id} value={item.id}>{memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · {item.name}</option>)}
+                {eligibleAccounts.map((item) => <option key={item.id} value={item.id}>{memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")} · {item.name}</option>)}
               </select>
             </label>}
           </div>}
@@ -1296,20 +1603,28 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
             <h2 className="font-bold">Recent transactions</h2>
             <p className="mt-1 text-xs text-slate-500">{rows.length} of {finance.transactions.length} household transactions</p>
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap gap-2 sm:max-w-2xl">
-            <input type="search" aria-label="Search transactions" value={filter} onChange={(event) => { setFilter(event.target.value); setTransactionPage(1); }} placeholder="Search category, date, amount, member…" className={`${inputClass} min-w-0`} />
-            <select aria-label="Filter transaction type" value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value); setTransactionPage(1); }} className="rounded-lg border border-slate-300 bg-white px-2 text-sm">
-              <option value="all">All types</option>
-              <option value="credit">Income & refunds</option>
-              <option value="debit">Expense</option>
-              <option value="transfer">Transfer</option>
-            </select>
-            <select aria-label="Filter transaction category" value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setTransactionPage(1); }} className="min-w-36 rounded-lg border border-slate-300 bg-white px-2 text-sm">
-              <option value="all">All categories</option>
-              {transactionCategories.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
+          <div className="mt-4 w-full rounded-2xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-slate-800">Income vs. expenses</h3><p className="mt-1 text-xs text-slate-500">Household cash flow · hover or select a month for category details</p></div><div className="flex flex-wrap gap-3 text-[11px] font-medium text-slate-600"><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-600" />Income</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-blue-500" />Expenses</span><span><i className="mr-1.5 inline-block h-2 w-2 rounded-full bg-violet-500" />Saved</span></div></div>
+            <CashFlowLineChart transactions={finance.transactions} anchorMonth={chartMonth} currency={currency} chartType="bar" />
           </div>
+          <div className="mt-4 flex w-full items-center gap-2">
+            <label className="relative flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5 transition focus-within:border-teal-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-100"><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-slate-400"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m13 13 4 4" /></svg><input type="search" aria-label="Search transactions" value={filter} onChange={(event) => { setFilter(event.target.value); setTransactionPage(1); }} placeholder="Search description, amount, member…" className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:ring-0" /></label>
+            <button type="button" aria-expanded={showFilters} aria-controls="transaction-filter-panel" onClick={() => setShowFilters((visible) => !visible)} className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border px-3.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 ${showFilters || activeFilterCount ? "border-teal-300 bg-teal-50 text-teal-800" : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"}`}>
+              <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M3 5h14M5.5 10h9M8 15h4" /><circle cx="6" cy="5" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="10" r="1.4" fill="currentColor" stroke="none" /><circle cx="10" cy="15" r="1.4" fill="currentColor" stroke="none" /></svg>
+              Filter{activeFilterCount > 0 && <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-teal-700 px-1 text-[11px] font-bold text-white">{activeFilterCount}</span>}
+            </button>
+          </div>
+          {showFilters && <div id="transaction-filter-panel" className="motion-panel-in mt-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <TransactionFilterField label="Type"><select aria-label="Filter transaction type" value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value); setTransactionPage(1); }} className="w-full cursor-pointer appearance-none border-0 bg-transparent p-0 pr-5 text-sm font-medium text-slate-800 outline-none focus:ring-0"><option value="all">All types</option>{sortOptionsAlphabetically([{ value: "credit", label: "Income & refunds" }, { value: "debit", label: "Expenses" }, { value: "transfer", label: "Transfers" }], (option) => option.label).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></TransactionFilterField>
+              <TransactionFilterField label="Category"><select aria-label="Filter transaction category" value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setTransactionPage(1); }} className="w-full cursor-pointer appearance-none border-0 bg-transparent p-0 pr-5 text-sm font-medium text-slate-800 outline-none focus:ring-0"><option value="all">All categories</option>{transactionCategories.map((item) => <option key={item} value={item}>{categoryOptionLabel(item)}</option>)}</select></TransactionFilterField>
+              <TransactionFilterField label="From"><input aria-label="Filter transactions from date" type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => { setDateFrom(event.target.value); setTransactionPage(1); }} className="w-full min-w-0 border-0 bg-transparent p-0 text-sm font-medium text-slate-800 outline-none focus:ring-0" /></TransactionFilterField>
+              <TransactionFilterField label="To"><input aria-label="Filter transactions through date" type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => { setDateTo(event.target.value); setTransactionPage(1); }} className="w-full min-w-0 border-0 bg-transparent p-0 text-sm font-medium text-slate-800 outline-none focus:ring-0" /></TransactionFilterField>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3"><p className="text-xs text-slate-500">{activeFilterCount ? `${activeFilterCount} filters applied · ${rows.length} matching ${rows.length === 1 ? "transaction" : "transactions"}` : "Choose a type, category, or date range."}</p>{activeFilterCount > 0 && <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); setTypeFilter("all"); setCategoryFilter("all"); setTransactionPage(1); }} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">Clear filters</button>}</div>
+          </div>}
         </div>
+        {invalidDateRange && <p role="alert" className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">The start date must be on or before the end date.</p>}
         <div className="mt-4 divide-y divide-slate-100">
           {visibleTransactions.map((item) => <div key={item.id} className="group -mx-2 flex flex-wrap items-center justify-between gap-3 rounded-xl px-2 py-3 transition-colors hover:bg-slate-50">
             <div className="flex min-w-0 items-center gap-3">
@@ -1326,13 +1641,13 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
               <EntityActions onEdit={() => setEditing(item)} onDelete={() => onRequestDelete({ recordLabel: item.description || item.category, description: item.type === "transfer" ? "This transfer and its linked account balance changes will be reversed." : "This transaction will be permanently removed from household records.", onConfirm: () => onDelete(item.id) })} />
             </div>
           </div>)}
-          {!rows.length && <p className="py-4 text-sm text-slate-500">{normalizedFilter || typeFilter !== "all" || categoryFilter !== "all" ? "No transactions match your search or filters." : "No transactions yet."}</p>}
+          {!rows.length && <p className="py-4 text-sm text-slate-500">{normalizedFilter || dateFrom || dateTo || typeFilter !== "all" || categoryFilter !== "all" ? "No transactions match your search or filters." : "No transactions yet."}</p>}
         </div>
         <PaginationControls page={safeTransactionPage} pageCount={transactionPageCount} total={rows.length} pageSize={TRANSACTION_PAGE_SIZE} label="Transactions" onPageChange={setTransactionPage} />
       </section>
     </div>
-    {showTransferDialog && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelTransferDialog(); }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="transfer-dialog-title" className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+    {showTransferDialog && <div className="motion-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelTransferDialog(); }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="transfer-dialog-title" className="motion-dialog-in w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
         <h2 id="transfer-dialog-title" className="text-lg font-bold">Choose the destination type</h2>
         <p className="mt-2 text-sm text-slate-600">Select which investment category should receive this transfer.</p>
         <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1644,12 +1959,12 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
                     </label>
                     <label className="text-xs font-medium text-slate-600">Type
                       <select aria-label={`Type row ${row.sourceRow}`} value={row.type} onChange={(event) => updateRow(row.sourceRow, { type: event.target.value as ImportTransactionType, included: true }, clearTypeWarnings)} className={`${inputClass} mt-1`}>
-                        <option value="debit">Expense</option><option value="income">Income</option><option value="refund">Refund</option><option value="payment">Payment (skip)</option>
+                        {sortOptionsAlphabetically([{ value: "debit", label: "Expense" }, { value: "income", label: "Income" }, { value: "refund", label: "Refund" }, { value: "payment", label: "Payment (skip)" }], (option) => option.label).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                       </select>
                     </label>
                     <label className="text-xs font-medium text-slate-600">Category
                       <select aria-label={`Category row ${row.sourceRow}`} value={row.category} onChange={(event) => updateRow(row.sourceRow, { category: event.target.value })} className={`${inputClass} mt-1`}>
-                        {TRANSACTION_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+                        {sortOptionsAlphabetically(TRANSACTION_CATEGORIES, categoryOptionLabel).map((category) => <option key={category} value={category}>{categoryOptionLabel(category)}</option>)}
                       </select>
                     </label>
                     {(row.postedDate || row.cardholder) && <p className="text-xs text-slate-500 md:col-span-2 xl:col-span-full">{row.postedDate && `Posted ${row.postedDate}`}{row.postedDate && row.cardholder ? " · " : ""}{row.cardholder && `Cardholder: ${row.cardholder}`}</p>}
@@ -1726,12 +2041,12 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
             </div>
             {!editing && <button ref={addBudgetButtonRef} type="button" aria-label={showEditor ? "Close budget form" : "Add budget"} aria-expanded={showEditor} aria-controls={showEditor ? "budget-editor" : undefined} onClick={() => { setShowEditor((open) => !open); setError(""); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xl font-semibold text-teal-800 transition hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{showEditor ? "−" : "+"}</button>}
           </div>
-          {showEditor && <section id="budget-editor" ref={editorRef} className="edit-focus-target mt-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
+          {showEditor && <section id="budget-editor" ref={editorRef} className="motion-panel-in edit-focus-target mt-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
               <div className="mb-3 font-semibold">{editing ? "Edit budget" : `Create a ${period} budget`}</div>
               <form onSubmit={submit} className="space-y-3">
                 <label className="block text-sm font-medium">Budget period<select value={period} onChange={(event) => setPeriod(event.target.value as "monthly" | "yearly")} className={`${inputClass} mt-1`}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></label>
                 <label className="block text-sm font-medium">{period === "monthly" ? "Budget month" : "Budget year"}{period === "monthly" ? <input type="month" required value={month} onChange={(event) => setMonth(event.target.value)} className={`${inputClass} mt-1`} /> : <input type="number" required min="1900" max="9999" value={month.slice(0, 4)} onChange={(event) => setMonth(`${event.target.value}-01`)} className={`${inputClass} mt-1`} />}</label>
-                <label className="block text-sm font-medium">Transaction category<select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}><option value="" disabled>Choose an expense category</option>{editing?.category && !(BUDGET_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{editing.category} (existing)</option>}{BUDGET_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+                <label className="block text-sm font-medium">Transaction category<select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}><option value="" disabled>Choose an expense category</option>{editing?.category && !(BUDGET_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{categoryOptionLabel(editing.category)} (existing)</option>}{sortOptionsAlphabetically(BUDGET_CATEGORIES, categoryOptionLabel).map((item) => <option key={item} value={item}>{categoryOptionLabel(item)}</option>)}</select></label>
                 <label className="block text-sm font-medium">{period === "monthly" ? "Monthly limit" : "Yearly limit"}<input required inputMode="decimal" value={limit} onChange={(event) => setLimit(event.target.value)} placeholder={`Amount (${currency})`} className={`${inputClass} mt-1`} /></label>
                 <div className="flex flex-wrap gap-2"><button disabled={savingBudget} className={buttonClass}>{savingBudget ? "Saving…" : editing ? "Save" : "Add"}</button><button type="button" disabled={savingBudget} onClick={() => { setEditing(undefined); setShowEditor(false); setCategory(""); setLimit(""); setPeriod("monthly"); setError(""); }} className={secondaryButtonClass}>Cancel</button>{!editing && <button type="button" disabled={!previousMonth || !previousMonthBudgetCount || copyingPreviousMonth} onClick={() => void copyPreviousMonth()} className={`${secondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}>{copyingPreviousMonth ? "Copying…" : "Copy prev month"}</button>}</div>
                 {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
@@ -1858,7 +2173,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
           <div className="flex items-center gap-2"><span className="rounded-lg bg-teal-50 p-2 text-teal-700"><WorkspaceIcon section="Goals" /></span><h2 className="font-bold">Household goals</h2></div>
           {!editing && <button ref={addGoalButtonRef} type="button" aria-label={showEditor ? "Close goal form" : "Add goal"} aria-expanded={showEditor} aria-controls={showEditor ? "goal-editor" : undefined} onClick={() => { setShowEditor((open) => !open); setError(""); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xl font-semibold text-teal-800 transition hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{showEditor ? "−" : "+"}</button>}
         </div>
-        {showEditor && <section id="goal-editor" ref={editorRef} className="edit-focus-target mb-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
+        {showEditor && <section id="goal-editor" ref={editorRef} className="motion-panel-in edit-focus-target mb-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
           <div className="mb-3 font-semibold">{editing ? "Edit goal" : "Create a savings goal"}</div>
           <form onSubmit={submit} className="space-y-3">
             <input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Goal name" className={inputClass} />
@@ -1949,6 +2264,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   const [editingManualValue, setEditingManualValue] = useState<ManualValueRecord>();
   const [manualValueError, setManualValueError] = useState("");
   const [chartMonth, setChartMonth] = useState("");
+  const [chartRange, setChartRange] = useState<ChartRange>("1y");
   const [activeChartMonth, setActiveChartMonth] = useState("");
   const [investmentActivityPage, setInvestmentActivityPage] = useState(1);
   const manualValueEditorRef = useEditFocus<HTMLElement>(editingManualValue?.id);
@@ -2017,9 +2333,10 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   const safeInvestmentActivityPage = Math.min(investmentActivityPage, investmentActivityPageCount);
   const visibleInvestmentActivity = recentInvestmentActivity.slice((safeInvestmentActivityPage - 1) * INVESTMENT_ACTIVITY_PAGE_SIZE, safeInvestmentActivityPage * INVESTMENT_ACTIVITY_PAGE_SIZE);
   const memberUids = [...new Set([...accounts.map((account) => account.ownerUid), ...finance.transactions.filter((item) => item.type === "transfer").map((item) => item.ownerUid)])];
-  const monthKeys = chartMonth ? Array.from({ length: 12 }, (_, index) => {
+  const monthCount = chartMonth ? chartRangeMonthCount(chartRange, chartMonth) : 0;
+  const monthKeys = chartMonth ? Array.from({ length: monthCount }, (_, index) => {
     const [year, month] = chartMonth.split("-").map(Number);
-    const date = new Date(year, month - 1 - (11 - index), 1);
+    const date = new Date(year, month - 1 - (monthCount - 1 - index), 1);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
   }) : [];
   const chartSeries = [
@@ -2039,8 +2356,9 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   });
   const allChartValues = monthlyPoints.flatMap((point) => [point.brokerage, point.retirement, point.savings].filter((amount): amount is number => amount !== null));
   const maxChartValue = Math.max(1, ...allChartValues);
-  const chartCoordinates = chartSeries.map((series) => ({
+  const chartCoordinates = chartSeries.map((series, seriesIndex) => ({
     ...series,
+    seriesIndex,
     points: monthlyPoints.flatMap((point, index) => {
       const amount = point[series.kind];
       if (amount === null) return [];
@@ -2051,6 +2369,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   const selectedChartTotal = selectedChartPoint
     ? [selectedChartPoint.brokerage, selectedChartPoint.retirement, selectedChartPoint.savings].reduce<number>((sum, amount) => sum + (amount ?? 0), 0)
     : 0;
+  const investmentBarWidth = Math.min(16, 636 / Math.max(monthKeys.length, 1) * 0.2);
   const chartMonthLabel = (monthKey: string, format: "short" | "long" = "short") => {
     const [year, month] = monthKey.split("-").map(Number);
     return new Date(year, month - 1, 1).toLocaleString(undefined, { month: format, ...(format === "long" ? { year: "numeric" } : {}) });
@@ -2134,13 +2453,13 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
       </article>;
     })}</section>
     <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-2"><span className="rounded-lg bg-indigo-50 p-2 text-indigo-700"><WorkspaceIcon section="Investments" /></span><div><h2 className="font-bold">Monthly investment balances</h2><p className="mt-1 text-sm text-slate-500">Hover or focus a month to compare Brokerage, 401(k), and Cash.</p></div></div>
-        <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-medium text-slate-600">{chartSeries.map((series) => <span key={series.kind} className="inline-flex items-center gap-2"><svg aria-hidden="true" width="24" height="10" viewBox="0 0 24 10"><line x1="1" y1="5" x2="23" y2="5" stroke={series.color} strokeWidth="3" strokeDasharray={series.dash || undefined} /></svg>{series.label}</span>)}</div>
+        <div className="flex flex-wrap items-center gap-3"><div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-medium text-slate-600">{chartSeries.map((series) => <span key={series.kind} className="inline-flex items-center gap-2"><i aria-hidden="true" className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: series.color }} />{series.label}</span>)}</div><ChartRangeControls value={chartRange} onChange={setChartRange} label="Investment chart range" /></div>
       </div>
       <p className="mt-2 text-xs text-slate-500">Past months use available saved snapshots; the current month uses latest balances. Missing snapshots show as —.</p>
       {chartMonth ? <div className="investment-chart-container mt-4 overflow-x-auto rounded-xl p-2 sm:p-4">
-        <svg viewBox="0 0 730 205" role="group" aria-label="Interactive 12-month investment balance chart" className="h-64 min-w-[680px] w-full overflow-visible">
+        <svg viewBox="0 0 730 205" role="group" aria-label={`Interactive ${chartRange === "ytd" ? "year-to-date" : chartRange} grouped bar chart of investment balances`} className="h-64 min-w-[680px] w-full overflow-visible">
           {[0, 1, 2, 3].map((step) => {
             const y = 150 - step * 40;
             const value = Math.round(maxChartValue * step / 3);
@@ -2154,12 +2473,10 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
             return <rect key={monthKey} x={x - 22} y="12" width="44" height="164" rx="8" fill={activeChartMonth === monthKey ? "#ccfbf1" : "transparent"} opacity={activeChartMonth === monthKey ? "0.65" : "1"} className="cursor-pointer transition-colors duration-200 focus:outline-none motion-reduce:transition-none" tabIndex={0} role="button" aria-label={description} aria-describedby="investment-chart-detail" aria-pressed={activeChartMonth === monthKey} onMouseEnter={() => setActiveChartMonth(monthKey)} onMouseLeave={() => setActiveChartMonth("")} onFocus={() => setActiveChartMonth(monthKey)} onBlur={() => setActiveChartMonth("")} onKeyDown={(event) => { if (event.key === "Escape") { setActiveChartMonth(""); (event.currentTarget as SVGRectElement).blur(); } }} />;
           })}
           {chartCoordinates.map((series) => <g key={series.kind} aria-hidden="true" pointerEvents="none">
-            {series.points.length > 1 && <polyline points={series.points.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" stroke={series.color} strokeWidth={activeChartMonth && series.points.some((point) => point.month === activeChartMonth) ? "4" : "3"} strokeDasharray={series.dash || undefined} strokeLinejoin="round" strokeLinecap="round" className="investment-chart-line" />}
             {series.points.map((point) => {
               const active = point.month === activeChartMonth;
-              if (series.marker === "square") return <rect key={point.month} x={point.x - (active ? 5 : 3.5)} y={point.y - (active ? 5 : 3.5)} width={active ? 10 : 7} height={active ? 10 : 7} rx="1" fill={series.color} className="transition-all duration-200 motion-reduce:transition-none"><title>{series.label}, {point.month}: {formatMoney(point.amount, currency)}</title></rect>;
-              if (series.marker === "diamond") return <polygon key={point.month} points={`${point.x},${point.y - (active ? 6 : 4)} ${point.x + (active ? 6 : 4)},${point.y} ${point.x},${point.y + (active ? 6 : 4)} ${point.x - (active ? 6 : 4)},${point.y}`} fill={series.color} className="transition-all duration-200 motion-reduce:transition-none"><title>{series.label}, {point.month}: {formatMoney(point.amount, currency)}</title></polygon>;
-              return <circle key={point.month} cx={point.x} cy={point.y} r={active ? 6 : 4} fill={series.color} className="transition-all duration-200 motion-reduce:transition-none"><title>{series.label}, {point.month}: {formatMoney(point.amount, currency)}</title></circle>;
+              const offset = (series.seriesIndex - 1) * (investmentBarWidth + 2);
+              return <rect key={point.month} x={point.x + offset - investmentBarWidth / 2} y={point.y} width={investmentBarWidth} height={Math.max(1, 150 - point.y)} rx="2.5" fill={series.color} opacity={active ? 1 : 0.82} stroke={active ? "white" : "none"} strokeWidth={active ? 1 : 0} className="transition-all duration-200 motion-reduce:transition-none"><title>{series.label}, {point.month}: {formatMoney(point.amount, currency)}</title></rect>;
             })}
           </g>)}
           {monthKeys.map((monthKey, index) => <text key={monthKey} x={64 + (index / Math.max(monthKeys.length - 1, 1)) * 636} y="174" textAnchor="middle" fontSize="10" fill="#64748b">{chartMonthLabel(monthKey)}</text>)}
@@ -2173,8 +2490,8 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     </div>
     </section>
     <section className="grid gap-6 xl:grid-cols-2">
-      <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">{editingAccount ? "Edit account" : "Add an account"}</h2><p className="mt-1 text-xs text-slate-500">{editingAccount ? "Update account details while keeping its saved balance." : `Enter the opening balance for this account in ${currency}. Future balance changes are recorded as transfers.`}</p><form ref={accountEditorRef} onSubmit={submitAccount} className="mt-4 space-y-3"><input required disabled={savingAccount} maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} /><select disabled={savingAccount} value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="savings">Cash / Personal Savings</option><option value="brokerage">Brokerage</option><option value="retirement">Retirement / 401(k)</option></select><select disabled={savingAccount} value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select><input required disabled={Boolean(editingAccount) || savingAccount} inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Opening balance" className={`${inputClass} disabled:bg-slate-100 disabled:text-slate-500`} />{editingAccount && <p className="text-xs text-slate-500">Account balance is changed by recording transfers.</p>}<div className="flex gap-2"><button disabled={savingAccount} className={buttonClass}>{savingAccount ? "Saving…" : editingAccount ? "Save account" : "Add account"}</button>{editingAccount && <button type="button" disabled={savingAccount} onClick={() => { setEditingAccount(undefined); setName(""); setBalance(""); setAccountError(""); }} className={secondaryButtonClass}>Cancel</button>}</div>{accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}</form><div className="mt-5 border-t border-slate-100 pt-4"><h3 className="font-semibold">Household accounts</h3><div className="mt-2 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span><EntityActions onEdit={() => setEditingAccount(account)} onDelete={() => void removeAccount(account)} /></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div></div></section>
-      <section ref={manualValueEditorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">{editingAccount ? "Edit account" : "Add an account"}</h2><p className="mt-1 text-xs text-slate-500">{editingAccount ? "Update account details while keeping its saved balance." : `Enter the opening balance for this account in ${currency}. Future balance changes are recorded as transfers.`}</p><form ref={accountEditorRef} onSubmit={submitAccount} className="mt-4 space-y-3"><input required disabled={savingAccount} maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} /><select disabled={savingAccount} value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="brokerage">Brokerage</option><option value="savings">Cash / Personal Savings</option><option value="retirement">Retirement / 401(k)</option></select><select disabled={savingAccount} value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select><input required disabled={Boolean(editingAccount) || savingAccount} inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Opening balance" className={`${inputClass} disabled:bg-slate-100 disabled:text-slate-500`} />{editingAccount && <p className="text-xs text-slate-500">Account balance is changed by recording transfers.</p>}<div className="flex gap-2"><button disabled={savingAccount} className={buttonClass}>{savingAccount ? "Saving…" : editingAccount ? "Save account" : "Add account"}</button>{editingAccount && <button type="button" disabled={savingAccount} onClick={() => { setEditingAccount(undefined); setName(""); setBalance(""); setAccountError(""); }} className={secondaryButtonClass}>Cancel</button>}</div>{accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}</form><div className="mt-5 border-t border-slate-100 pt-4"><h3 className="font-semibold">Household accounts</h3><div className="mt-2 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span><EntityActions onEdit={() => setEditingAccount(account)} onDelete={() => void removeAccount(account)} /></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div></div></section>
+      <section ref={manualValueEditorRef} className="motion-panel-in edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold">Household assets &amp; liabilities</h2>
         <p className="mt-1 text-xs text-slate-500">Record assets and debts. Assets increase household net worth; liabilities reduce it.</p>
         <form onSubmit={submitManualValue} className="mt-4 space-y-3">
@@ -2204,7 +2521,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     <section className="rounded-2xl border border-slate-200 bg-white p-5">
       <h2 className="font-bold">Add a monthly snapshot</h2>
       <p className="mt-1 text-xs text-slate-500">Historical snapshots are saved at the bottom of this page and preserve existing monthly records.</p>
-      <form onSubmit={submitSnapshot} className="mt-4 grid gap-2 sm:grid-cols-[1.4fr_1fr_1fr_auto]"><select required disabled={savingSnapshot} value={snapshotAccount} onChange={(event) => setSnapshotAccount(event.target.value)} className={inputClass}><option value="">Choose account</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {memberNames.get(account.ownerUid) ?? "Member"}</option>)}</select><input required disabled={savingSnapshot} aria-label="Snapshot month" type="month" value={snapshotMonth} onChange={(event) => setSnapshotMonth(event.target.value)} className={inputClass} /><input required disabled={savingSnapshot} aria-label="Snapshot balance" inputMode="decimal" value={snapshotAmount} onChange={(event) => setSnapshotAmount(event.target.value)} placeholder="Historical balance" className={inputClass} /><button disabled={savingSnapshot} className={buttonClass}>{savingSnapshot ? "Saving…" : "Save snapshot"}</button></form>{snapshotError && <p role="alert" className="mt-2 text-sm text-red-700">{snapshotError}</p>}
+      <form onSubmit={submitSnapshot} className="mt-4 grid gap-2 sm:grid-cols-[1.4fr_1fr_1fr_auto]"><select required disabled={savingSnapshot} value={snapshotAccount} onChange={(event) => setSnapshotAccount(event.target.value)} className={inputClass}><option value="">Choose account</option>{sortOptionsAlphabetically(accounts, (account) => `${account.name} · ${memberNames.get(account.ownerUid) ?? "Member"}`).map((account) => <option key={account.id} value={account.id}>{account.name} · {memberNames.get(account.ownerUid) ?? "Member"}</option>)}</select><input required disabled={savingSnapshot} aria-label="Snapshot month" type="month" value={snapshotMonth} onChange={(event) => setSnapshotMonth(event.target.value)} className={inputClass} /><input required disabled={savingSnapshot} aria-label="Snapshot balance" inputMode="decimal" value={snapshotAmount} onChange={(event) => setSnapshotAmount(event.target.value)} placeholder="Historical balance" className={inputClass} /><button disabled={savingSnapshot} className={buttonClass}>{savingSnapshot ? "Saving…" : "Save snapshot"}</button></form>{snapshotError && <p role="alert" className="mt-2 text-sm text-red-700">{snapshotError}</p>}
     </section>
   </div>;
 }
@@ -2328,7 +2645,7 @@ function HouseholdSection({ householdName, uid, households, activeHouseholdId, d
           </label>
           <label className="block text-sm font-medium">Currency
             <select value={newHouseholdCurrency} onChange={(event) => setNewHouseholdCurrency(event.target.value as HouseholdCurrency)} className={`${inputClass} mt-1`}>
-              {HOUSEHOLD_CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency} — {HOUSEHOLD_CURRENCY_NAMES[currency]}</option>)}
+              {sortOptionsAlphabetically(HOUSEHOLD_CURRENCIES, (currency) => HOUSEHOLD_CURRENCY_NAMES[currency]).map((currency) => <option key={currency} value={currency}>{currency} — {HOUSEHOLD_CURRENCY_NAMES[currency]}</option>)}
             </select>
           </label>
           <button disabled={householdAction !== null} className={`${buttonClass} disabled:opacity-60`}>{householdAction === "create" ? "Creating…" : "Create household"}</button>

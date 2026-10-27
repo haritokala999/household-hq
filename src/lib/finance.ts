@@ -169,6 +169,53 @@ export async function markRecurringPaymentPaid(
   });
 }
 
+/** Reverses one paid bill occurrence and removes its generated expense atomically. */
+export async function undoRecurringPaymentPaid(
+  database: Firestore,
+  householdId: string,
+  paymentId: string,
+  dueDate: string,
+) {
+  if (!isCalendarDate(dueDate)) throw new Error("The bill due date is invalid.");
+  const paymentReference = doc(database, ...path(householdId, "recurringPayments"), paymentId);
+  const transactionReference = doc(database, ...path(householdId, "transactions"), `bill-${paymentId}-${dueDate}`);
+  return runTransaction(database, async (databaseTransaction) => {
+    const [paymentSnapshot, expenseSnapshot] = await Promise.all([
+      databaseTransaction.get(paymentReference),
+      databaseTransaction.get(transactionReference),
+    ]);
+    if (!paymentSnapshot.exists()) throw new Error("This bill no longer exists.");
+    const payment = paymentSnapshot.data() as RecurringPayment;
+    const paidDates = payment.paidDates ?? [];
+    if (!paidDates.includes(dueDate)) return false;
+
+    if (expenseSnapshot.exists()) {
+      const expense = expenseSnapshot.data() as FinancialTransaction;
+      const expectedCategory = payment.category ?? "Groceries";
+      const isGeneratedBillExpense = expense.type === "debit"
+        && expense.purpose === "ordinary"
+        && expense.transferDestination === null
+        && expense.category === expectedCategory
+        && expense.description === payment.name
+        && expense.amountMinor === payment.amountMinor
+        && expense.date === dueDate
+        && expense.accountId === null
+        && (expense.sourceAccountId ?? null) === null
+        && expense.ledgerApplied === false
+        && expense.createdBy === expense.ownerUid;
+      if (!isGeneratedBillExpense) {
+        throw new Error("This bill’s transaction was changed, so it was kept. Restore its original details before undoing the paid status.");
+      }
+      databaseTransaction.delete(transactionReference);
+    }
+    databaseTransaction.update(paymentReference, {
+      paidDates: paidDates.filter((date) => date !== dueDate),
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  });
+}
+
 export async function deleteRecurringPayment(database: Firestore, householdId: string, paymentId: string) {
   await deleteDoc(doc(database, ...path(householdId, "recurringPayments"), paymentId));
 }
