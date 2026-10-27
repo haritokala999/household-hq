@@ -34,6 +34,8 @@ import {
   formatMoney,
   goalProgressPercent,
   getAccountSnapshots,
+  isOrdinaryExpenseTransaction,
+  markRecurringPaymentPaid,
   isCalendarDate,
   isMonthKey,
   loadHouseholdFinance,
@@ -141,6 +143,7 @@ export default function Home() {
   const [signOutError, setSignOutError] = useState("");
   const [signingOut, setSigningOut] = useState(false);
   const [month, setMonth] = useState("");
+  const [todayMonth, setTodayMonth] = useState("");
   const [transactionFilter, setTransactionFilter] = useState("");
   const [transactionTypeFilter, setTransactionTypeFilter] = useState("all");
   const [editingTransaction, setEditingTransaction] = useState<FinancialTransaction | undefined>();
@@ -270,8 +273,10 @@ export default function Home() {
 
   useEffect(() => {
     // Current time is runtime data and must not be read during prerendering.
+    const current = currentMonthKey();
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMonth(currentMonthKey());
+    setMonth(current);
+    setTodayMonth(current);
   }, []);
 
   useEffect(() => {
@@ -636,20 +641,20 @@ export default function Home() {
             </div>
           </header>
           <nav aria-label="Workspace" className="workspace-nav glass-nav fixed inset-x-0 bottom-0 z-40 mx-0 flex w-full max-w-none justify-around gap-1 rounded-none rounded-t-2xl p-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:sticky md:inset-x-auto md:top-4 md:bottom-auto md:mx-auto md:mb-4 md:mt-0 md:w-fit md:max-w-[calc(100%-2rem)] md:justify-start md:rounded-full md:p-2">
-            {(["Transactions", "Budgets", "Dashboard", "Goals", "Investments"] as const).map((item) => renderWorkspaceItem(item, "mobile-workspace-nav-item"))}
+            {(["Dashboard", "Transactions", "Budgets", "Goals", "Investments"] as const).map((item) => renderWorkspaceItem(item, "mobile-workspace-nav-item"))}
             {workspaceSections.map((item) => renderWorkspaceItem(item, "desktop-workspace-nav-item"))}
           </nav>
           <div className="mx-auto max-w-7xl space-y-6 px-4 pb-28 pt-5 sm:px-8 sm:pt-8 md:pb-8">
             {financeError && <ErrorPanel message={financeError} onRetry={refresh} />}
             {loadingFinance ? <LoadingPanel label="Loading household records…" /> : (
               <>
-                {section === "Dashboard" && <Dashboard finance={finance} month={month} setMonth={setMonth} currency={currency} memberNames={memberNames} onOpen={setSection} onRequestDelete={requestDelete} onAddPayment={(input) => runAction(
+                {section === "Dashboard" && <Dashboard finance={finance} month={month} todayMonth={todayMonth} snapshotHistory={snapshotHistory} setMonth={setMonth} currency={currency} profileName={profileName} onOpen={setSection} onRequestDelete={requestDelete} onAddPayment={(input) => runAction(
                   () => saveRecurringPayment(db, householdId!, uid!, input),
-                  input.frequency === "once" ? "One-time payment added." : "Recurring payment added.",
+                  input.frequency === "once" ? "One-time bill added." : "Recurring bill added.",
                   undefined,
                   undefined,
                   true,
-                )} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.", undefined, undefined, true)} />}
+                )} onMarkPaymentPaid={(id, dueDate) => runAction(() => markRecurringPaymentPaid(db, householdId!, uid!, id, dueDate), "Bill marked paid and added to transactions.", undefined, undefined, true)} onDeletePayment={(id) => runAction(() => deleteRecurringPayment(db, householdId!, id), "Payment removed.", undefined, undefined, true)} />}
                 {section === "Transactions" && <TransactionsSection finance={finance} currency={currency} householdId={householdId!} uid={uid ?? ""} memberNames={memberNames} filter={transactionFilter} setFilter={setTransactionFilter} typeFilter={transactionTypeFilter} setTypeFilter={setTransactionTypeFilter} onSave={(input, existing) => runAction(() => saveTransaction(db, householdId!, uid!, input, existing), "Transaction saved.", undefined, existing ? undefined : input.type === "credit" ? "income" : input.type === "transfer" ? "transfer" : undefined, true)} onDelete={(id) => runAction(() => deleteTransaction(db, householdId!, id), "Transaction deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} onImportComplete={refresh} editing={editingTransaction} setEditing={setEditingTransaction} />}
                 {section === "Budgets" && <BudgetsSection finance={finance} currency={currency} month={month} setMonth={setMonth} onSave={(input, existing) => runAction(() => saveBudget(db, householdId!, uid!, input, existing), "Budget saved.", undefined, existing ? undefined : "budget", true)} onCopyPrevious={(sourceMonth, targetMonth) => runAction(() => copyPreviousMonthBudgets(db, householdId!, uid!, sourceMonth, targetMonth, finance.budgets), "Previous month’s budgets copied into the selected month.", undefined, undefined, true)} onDelete={(id) => runAction(() => deleteRecord(db, householdId!, "budgets", id), "Budget deleted.", undefined, undefined, true)} onRequestDelete={requestDelete} editing={editingBudget} setEditing={setEditingBudget} />}
                 {section === "Goals" && <GoalsSection finance={finance} currency={currency} uid={uid ?? ""} memberNames={memberNames} onSave={(input, existing) => runAction(() => saveGoal(db, householdId!, uid!, input, existing), "Goal saved.", undefined, !existing && input.currentMinor >= input.targetMinor ? "goal" : undefined, true)} onAddProgress={(goalId, amountMinor, onSuccess) => {
@@ -744,86 +749,239 @@ function FeatureHeading({ section, title, description }: { section: Section; tit
   );
 }
 
-function MetricIcon({ name }: { name: "netWorth" | "income" | "expenses" | "saved" }) {
+function MetricIcon({ name }: { name: "netWorth" | "income" | "expenses" }) {
   const paths = {
-    netWorth: <><path d="M3 17 9 11l4 4 8-9" /><path d="M15 6h6v6" /><path d="M4 21h16" /></>,
-    income: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></>,
-    expenses: <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h4" /></>,
-    saved: <><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8" /><path d="M4 4v4h4" /><path d="M12 8v4l3 2" /></>,
+    netWorth: <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M3 10h18M7 7V5a2 2 0 0 1 2-2h8" /><path d="M16 14h2" /></>,
+    income: <><circle cx="12" cy="12" r="9" /><path d="M12 6v9m-4-4 4 4 4-4" /></>,
+    expenses: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 9h18m-14 5h4" /></>,
   };
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">{paths[name]}</svg>;
 }
 
-function MetricCard({ title, value, detail, accent = "emerald", note, icon, extra }: { title: string; value: string; detail: string; accent?: string; note?: string; icon: "netWorth" | "income" | "expenses" | "saved"; extra?: ReactNode }) {
-  const colors: Record<string, string> = { emerald: "bg-emerald-50 text-emerald-700 ring-emerald-100", blue: "bg-sky-50 text-sky-700 ring-sky-100", amber: "bg-orange-50 text-orange-800 ring-orange-100", violet: "bg-violet-50 text-violet-700 ring-violet-100" };
-  return <article className="group flex h-full min-h-[190px] flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md motion-reduce:transition-none"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium text-slate-500">{title}</p><p className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{value}</p></div><span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none ${colors[accent] ?? colors.emerald}`}><MetricIcon name={icon} /></span></div><p className={`mt-3 inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${colors[accent] ?? colors.emerald}`}>{detail}</p>{note && <p className="mt-2 text-xs leading-5 text-slate-500">{note}</p>}{extra && <div className="mt-auto pt-3">{extra}</div>}</article>;
+function DashboardSectionIcon({ name }: { name: "cashFlow" | "category" | "bills" | "transactions" }) {
+  const drawings = {
+    cashFlow: <><path d="m3 16 5-5 4 3 8-9" /><path d="M15 5h5v5" /></>,
+    category: <><path d="M12 3a9 9 0 1 0 9 9h-9V3Z" /><path d="M15 3.5A9 9 0 0 1 20.5 9H15V3.5Z" /></>,
+    bills: <><rect x="4" y="5" width="16" height="16" rx="2" /><path d="M8 3v4m8-4v4M4 10h16m-11 4h6m-6 3h4" /></>,
+    transactions: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 9h18m-14 5h5m3 0h2" /></>,
+  };
+  return <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-800 ring-1 ring-teal-100"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">{drawings[name]}</svg></span>;
 }
 
-function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, onRequestDelete, onAddPayment, onDeletePayment }: {
-  finance: HouseholdFinanceData; month: string; setMonth: (month: string) => void; currency: string; memberNames: Map<string, string>; onOpen: (section: Section) => void; onRequestDelete: (request: DeleteRequest) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey">) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
+function MetricCard({ title, value, detail, accent = "emerald", note, icon, extra }: { title: string; value: string; detail: string; accent?: string; note?: string; icon: "netWorth" | "income" | "expenses"; extra?: ReactNode }) {
+  const colors: Record<string, string> = { emerald: "bg-emerald-50 text-emerald-700 ring-emerald-100", blue: "bg-sky-50 text-sky-700 ring-sky-100", amber: "bg-orange-50 text-orange-800 ring-orange-100", violet: "bg-violet-50 text-violet-700 ring-violet-100" };
+  return <article className="group flex h-full min-h-[150px] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md motion-reduce:transition-none"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-medium text-slate-500">{title}</p><p className="mt-3 text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">{value}</p></div><span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none ${colors[accent] ?? colors.emerald}`}><MetricIcon name={icon} /></span></div><p className={`mt-3 inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-medium ${colors[accent] ?? colors.emerald}`}>{detail}</p>{note && <p className="mt-2 text-xs leading-5 text-slate-500">{note}</p>}{extra && <div className="mt-auto pt-3">{extra}</div>}</article>;
+}
+
+function percentChangeLabel(current: number, previous: number, period: string) {
+  if (previous === 0) return current === 0 ? `No change ${period}` : `New ${period}`;
+  const percent = Math.round(((current - previous) / Math.abs(previous)) * 100);
+  if (percent === 0) return `No change ${period}`;
+  return `${percent > 0 ? "↑" : "↓"} ${Math.abs(percent)}% ${percent > 0 ? "increase" : "decrease"} ${period}`;
+}
+
+type CashFlowMonth = { month: string; year: number; key: string; income: number; expenses: number };
+
+function CashFlowLineChart({ monthly, currency }: { monthly: CashFlowMonth[]; currency: string }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const left = 42;
+  const right = 700;
+  const top = 18;
+  const bottom = 174;
+  const minValue = Math.min(0, ...monthly.map((item) => item.income - item.expenses));
+  const maxValue = Math.max(1, ...monthly.flatMap((item) => [item.income, item.expenses, item.income - item.expenses]));
+  const x = (index: number) => monthly.length < 2 ? (left + right) / 2 : left + index * (right - left) / (monthly.length - 1);
+  const y = (value: number) => top + (maxValue - value) / (maxValue - minValue) * (bottom - top);
+  const valueFor = (item: CashFlowMonth, key: "income" | "expenses" | "saved") => key === "saved" ? item.income - item.expenses : item[key];
+  const line = (key: "income" | "expenses" | "saved") => monthly.map((item, index) => `${x(index)},${y(valueFor(item, key))}`).join(" ");
+
+  return <div className="mt-4 min-w-0">
+    <svg viewBox="0 0 720 220" role="group" aria-label="Monthly income and spending line chart" className="h-auto w-full overflow-visible">
+      {[0, 1, 2, 3].map((tick) => {
+        const value = minValue + (maxValue - minValue) * (3 - tick) / 3;
+        const position = y(value);
+        return <g key={tick}><line x1={left} x2={right} y1={position} y2={position} stroke="#e2e8f0" strokeDasharray="3 5" /><text x={left - 7} y={position + 4} textAnchor="end" className="fill-slate-400" fontSize="10">{formatMoney(value, currency)}</text></g>;
+      })}
+      <polyline points={line("income")} fill="none" stroke="#0f9f78" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points={line("expenses")} fill="none" stroke="#4388e8" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points={line("saved")} fill="none" stroke="#8b5cf6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      {monthly.map((item, index) => <g key={item.key} tabIndex={0} role="img" aria-label={`${item.month} ${item.year}: income ${formatMoney(item.income, currency)}, spent ${formatMoney(item.expenses, currency)}, saved ${formatMoney(item.income - item.expenses, currency)}`} onMouseEnter={() => setActiveIndex(index)} onMouseLeave={() => setActiveIndex(null)} onFocus={() => setActiveIndex(index)} onBlur={() => setActiveIndex(null)} className="cursor-default outline-none">
+        <title>{`${item.month} ${item.year} · Income ${formatMoney(item.income, currency)} · Spent ${formatMoney(item.expenses, currency)} · Saved ${formatMoney(item.income - item.expenses, currency)}`}</title>
+        <circle cx={x(index)} cy={y(item.income)} r={activeIndex === index ? 6 : 4} fill="#0f9f78" stroke="white" strokeWidth="2" />
+        <circle cx={x(index)} cy={y(item.expenses)} r={activeIndex === index ? 6 : 4} fill="#4388e8" stroke="white" strokeWidth="2" />
+        <circle cx={x(index)} cy={y(item.income - item.expenses)} r={activeIndex === index ? 6 : 4} fill="#8b5cf6" stroke="white" strokeWidth="2" />
+        <text x={x(index)} y="198" textAnchor="middle" className="fill-slate-500" fontSize="10">{item.month}</text>
+      </g>)}
+    </svg>{activeIndex === null ? <p className="min-h-5 text-xs text-slate-400">Hover or focus a month to see the values.</p> : <p aria-live="polite" className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700"><span className="font-semibold">{monthly[activeIndex].month} {monthly[activeIndex].year}:</span> Income {formatMoney(monthly[activeIndex].income, currency)} · Spent {formatMoney(monthly[activeIndex].expenses, currency)} · Saved {formatMoney(monthly[activeIndex].income - monthly[activeIndex].expenses, currency)}</p>}
+  </div>;
+}
+
+type PlusMenuAction = { label: string; onSelect: () => void };
+
+function PlusActionButton({ label, onClick, actions, expanded = false }: { label: string; onClick?: () => void; actions?: PlusMenuAction[]; expanded?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function dismiss(event: PointerEvent | KeyboardEvent) {
+      if (event instanceof KeyboardEvent && event.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      if (event instanceof PointerEvent && event.target instanceof Node && !containerRef.current?.contains(event.target)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", dismiss);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", dismiss);
+    };
+  }, [open]);
+  const hasMenu = Boolean(actions?.length);
+  return <div ref={containerRef} className="relative inline-flex">
+    <button type="button" aria-label={label} aria-haspopup={hasMenu ? "menu" : undefined} aria-expanded={hasMenu ? open : expanded} title={label} onClick={() => hasMenu ? setOpen((value) => !value) : onClick?.()} className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-100 text-teal-800 shadow-sm transition hover:scale-105 hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 motion-reduce:transform-none">
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={`h-5 w-5 transition-transform ${open || expanded ? "rotate-45" : ""}`}><path d="M12 5v14M5 12h14" /></svg>
+    </button>
+    {open && actions && <div role="menu" aria-label={label} className="absolute right-0 top-full z-30 mt-2 min-w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">{actions.map((action) => <button key={action.label} type="button" role="menuitem" onClick={() => { setOpen(false); action.onSelect(); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{action.label}</button>)}</div>}
+  </div>;
+}
+
+function Dashboard({ finance, month, todayMonth, snapshotHistory, setMonth, currency, profileName, onOpen, onRequestDelete, onAddPayment, onMarkPaymentPaid, onDeletePayment }: {
+  finance: HouseholdFinanceData; month: string; todayMonth: string; snapshotHistory: Record<string, AccountSnapshot[]>; setMonth: (month: string) => void; currency: string; profileName: string; onOpen: (section: Section) => void; onRequestDelete: (request: DeleteRequest) => void; onAddPayment: (input: Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey" | "startDate" | "category">) => Promise<void>; onMarkPaymentPaid: (id: string, dueDate: string) => Promise<void>; onDeletePayment: (id: string) => Promise<void>;
 }) {
-  const financialSummary = calculateFinanceSummary(finance, month || "1970-01");
+  const selectedMonth = month || "1970-01";
+  const financialSummary = calculateFinanceSummary(finance, selectedMonth);
+  const previousMonthSummary = calculateFinanceSummary(finance, previousMonthKey(selectedMonth));
   const [paymentName, setPaymentName] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentDueDay, setPaymentDueDay] = useState("1");
-  const [paymentFrequency, setPaymentFrequency] = useState<"monthly" | "once">("monthly");
+  const [paymentStartDate, setPaymentStartDate] = useState("");
+  const [paymentCategory, setPaymentCategory] = useState("Groceries");
+  const [paymentFrequency, setPaymentFrequency] = useState<"monthly" | "biweekly" | "every6months" | "once">("monthly");
   const [paymentError, setPaymentError] = useState("");
   const [savingPayment, setSavingPayment] = useState(false);
+  const [markingPayment, setMarkingPayment] = useState<string | null>(null);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
-  const monthTransactions = finance.transactions.filter((item) => item.date.startsWith(`${month}-`)).sort((a, b) => b.date.localeCompare(a.date));
-  const [year, monthNumber] = month.split("-").map(Number);
-  const previousMonth = new Date(year, monthNumber - 2, 1);
-  const previousPrefix = `${previousMonth.getFullYear()}-${String(previousMonth.getMonth() + 1).padStart(2, "0")}-`;
-  const totalsFor = (prefix: string) => finance.transactions.filter((item) => item.date.startsWith(prefix)).reduce((totals, item) => {
-    if (item.type === "credit" && item.purpose === "income") totals.income += item.amountMinor;
-    else if (item.purpose === "ordinary" && (item.type === "debit" || item.type === "credit")) totals.expenses += item.type === "credit" ? -item.amountMinor : item.amountMinor;
-    else if ((item.type === "debit" || item.type === "transfer") && item.purpose === "investment") totals.investments += item.amountMinor;
-    return totals;
-  }, { income: 0, expenses: 0, investments: 0 });
-  const current = totalsFor(`${month}-`);
-  const previous = totalsFor(previousPrefix);
-  const savings = current.income - current.expenses - current.investments;
-  const previousSavings = previous.income - previous.expenses - previous.investments;
-  const percentChange = (value: number, prior: number) => prior === 0 ? (value === 0 ? "0%" : "New") : `${value >= prior ? "+" : "−"}${Math.abs(Math.round(((value - prior) / Math.abs(prior)) * 100))}%`;
-  const monthly = Array.from({ length: 12 }, (_, index) => {
-    const key = `${year}-${String(index + 1).padStart(2, "0")}-`;
-    const totals = totalsFor(key);
+  const [cashFlowRange, setCashFlowRange] = useState<3 | 6 | 12>(6);
+  const firstName = profileName.trim().split(/\s+/)[0] || "there";
+  const [greeting, setGreeting] = useState("");
+  useEffect(() => {
+    const updateGreeting = () => {
+      const hour = new Date().getHours();
+      setGreeting(hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening");
+    };
+    const initialTimer = window.setTimeout(updateGreeting, 0);
+    const timer = window.setInterval(updateGreeting, 60_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, []);
+  const [yearText, monthText] = selectedMonth.split("-");
+  const year = Number(yearText);
+  const monthNumber = Number(monthText);
+  const activeAccounts = finance.accounts.filter((account) => !account.archived);
+  const comparisonMonth = previousMonthKey(selectedMonth);
+  const hasHistoricalManualValues = finance.assets.length > 0 || finance.liabilities.length > 0;
+  const canCompareNetWorth = !hasHistoricalManualValues
+    && !finance.accounts.some((account) => account.archived)
+    && selectedMonth <= (todayMonth || selectedMonth)
+    && activeAccounts.every((account) => (snapshotHistory[account.id] ?? []).some((snapshot) => snapshot.month === comparisonMonth)
+      && (selectedMonth === todayMonth || (snapshotHistory[account.id] ?? []).some((snapshot) => snapshot.month === selectedMonth)));
+  const previousMonthNetWorth = activeAccounts.reduce((sum, account) => sum + ((snapshotHistory[account.id] ?? []).find((snapshot) => snapshot.month === comparisonMonth)?.amountMinor ?? 0), 0);
+  const currentMonthNetWorth = selectedMonth === todayMonth
+    ? activeAccounts.reduce((sum, account) => sum + account.balanceMinor, 0)
+    : activeAccounts.reduce((sum, account) => sum + ((snapshotHistory[account.id] ?? []).find((snapshot) => snapshot.month === selectedMonth)?.amountMinor ?? 0), 0);
+  const dateForMonth = (yearNumber: number, monthIndex: number, day: number) => {
+    const monthKey = `${yearNumber}-${String(monthIndex + 1).padStart(2, "0")}`;
+    return `${monthKey}-${String(day).padStart(2, "0")}`;
+  };
+  const formatDate = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  const monthTransactions = finance.transactions.filter((item) => item.date.startsWith(`${selectedMonth}-`));
+  const monthly = Array.from({ length: cashFlowRange }, (_, index) => {
+    const date = new Date(year, monthNumber - cashFlowRange + index, 1);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    const transactions = finance.transactions.filter((item) => item.date.startsWith(`${key}-`));
+    const income = transactions.filter((item) => item.type === "credit" && item.purpose === "income")
+      .reduce((sum, item) => sum + item.amountMinor, 0);
+    const expenses = transactions.filter(isOrdinaryExpenseTransaction)
+      .reduce((sum, item) => sum + (item.type === "credit" ? -item.amountMinor : item.amountMinor), 0);
     return {
-      month: new Date(year, index, 1).toLocaleString(undefined, { month: "long" }),
-      shortMonth: new Date(year, index, 1).toLocaleString(undefined, { month: "short" }),
-      income: totals.income,
-      expenses: totals.expenses,
-      investments: totals.investments,
-      savings: totals.income - totals.expenses - totals.investments,
+      month: date.toLocaleString(undefined, { month: "short" }),
+      year: date.getFullYear(),
+      key,
+      income,
+      expenses,
     };
   });
-  const chartMax = Math.max(1, ...monthly.flatMap((item) => [item.expenses, item.savings, 0]));
-  const memberIncome = new Map<string, number>();
-  for (const item of monthTransactions) if (item.type === "credit" && item.purpose === "income") memberIncome.set(item.ownerUid, (memberIncome.get(item.ownerUid) ?? 0) + item.amountMinor);
-  const changeText = (amount: number, prior: number) => `${percentChange(amount, prior)} vs last month`;
-  const daysInMonth = new Date(year, monthNumber, 0).getDate();
-  const firstWeekday = new Date(year, monthNumber - 1, 1).getDay();
-  const paymentDates = finance.recurringPayments.filter((payment) =>
-    (payment.frequency ?? "monthly") === "monthly" || payment.monthKey === month
-  ).map((payment) => ({
-    ...payment,
-    day: Math.min(payment.dueDay, daysInMonth),
-  })).sort((a, b) => a.day - b.day);
+  const spendingByCategory = [...monthTransactions.reduce((totals, item) => {
+    if (!isOrdinaryExpenseTransaction(item)) return totals;
+    totals.set(item.category, (totals.get(item.category) ?? 0) + (item.type === "credit" ? -item.amountMinor : item.amountMinor));
+    return totals;
+  }, new Map<string, number>())]
+    .filter(([, amount]) => amount !== 0)
+    .sort((a, b) => b[1] - a[1]);
+  const totalCategorySpend = spendingByCategory.reduce((sum, [, amount]) => sum + amount, 0);
+  const positiveCategorySpend = spendingByCategory.reduce((sum, [, amount]) => sum + Math.max(0, amount), 0);
+  const categoryPalette = ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"];
+  const visibleCategories = spendingByCategory.length > 6
+    ? [...spendingByCategory.slice(0, 5), ["Other", spendingByCategory.slice(5).reduce((sum, [, amount]) => sum + amount, 0)] as [string, number]]
+    : spendingByCategory;
+  const recentTransactions = [...finance.transactions]
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.toMillis() - a.createdAt.toMillis())
+    .slice(0, 8);
+  const monthDays = new Date(year, monthNumber, 0).getDate();
+  const monthStart = `${selectedMonth}-01`;
+  const monthEnd = dateForMonth(year, monthNumber - 1, monthDays);
+  const monthStartTime = Date.parse(`${monthStart}T00:00:00Z`);
+  const monthEndTime = Date.parse(`${monthEnd}T00:00:00Z`);
+  const paymentDates = finance.recurringPayments.flatMap((payment) => {
+    const frequency = payment.frequency ?? "monthly";
+    const anchorDate = payment.startDate ?? dateForMonth(year, monthNumber - 1, payment.dueDay);
+    const anchorMonth = anchorDate.slice(0, 7);
+    let dates: string[] = [];
+    if (frequency === "once") {
+      if (payment.monthKey === selectedMonth) dates = [dateForMonth(year, monthNumber - 1, Math.min(payment.dueDay, monthDays))];
+    } else if (frequency === "monthly") {
+      if (selectedMonth >= anchorMonth) dates = [dateForMonth(year, monthNumber - 1, Math.min(payment.dueDay, monthDays))];
+    } else if (frequency === "every6months") {
+      const [anchorYear, anchorMonthNumber] = anchorMonth.split("-").map(Number);
+      const monthDifference = (year - anchorYear) * 12 + monthNumber - anchorMonthNumber;
+      if (monthDifference >= 0 && monthDifference % 6 === 0) {
+        dates = [dateForMonth(year, monthNumber - 1, Math.min(payment.dueDay, monthDays))];
+      }
+    } else {
+      const anchorTime = Date.parse(`${anchorDate}T00:00:00Z`);
+      const interval = 14 * 24 * 60 * 60 * 1000;
+      const firstInMonthTime = anchorTime < monthStartTime
+        ? anchorTime + Math.ceil((monthStartTime - anchorTime) / interval) * interval
+        : anchorTime;
+      for (let time = firstInMonthTime; time <= monthEndTime; time += interval) {
+        if (time >= monthStartTime) dates.push(new Date(time).toISOString().slice(0, 10));
+      }
+    }
+    return dates.map((dueDate) => ({ ...payment, dueDate, occurrenceId: `${payment.id}-${dueDate}`, paid: payment.paidDates?.includes(dueDate) ?? false }));
+  })
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.name.localeCompare(b.name));
+
   async function submitPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingPayment) return;
     setPaymentError("");
     setSavingPayment(true);
     try {
       await onAddPayment({
         name: paymentName,
         amountMinor: parseMoneyToMinorUnits(paymentAmount, currency),
-        dueDay: Number(paymentDueDay),
+        dueDay: Number(paymentStartDate.slice(-2)),
         frequency: paymentFrequency,
-        ...(paymentFrequency === "once" ? { monthKey: month } : {}),
+        category: paymentCategory,
+        startDate: paymentStartDate,
+        ...(paymentFrequency === "once" ? { monthKey: paymentStartDate.slice(0, 7) } : {}),
       });
       setPaymentName("");
       setPaymentAmount("");
-      setPaymentDueDay("1");
+      setPaymentStartDate("");
+      setPaymentCategory("Groceries");
       setPaymentFrequency("monthly");
       setShowPaymentForm(false);
     } catch (cause) {
@@ -832,29 +990,70 @@ function Dashboard({ finance, month, setMonth, currency, memberNames, onOpen, on
       setSavingPayment(false);
     }
   }
-  return <>
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-bold">This month</h2><p className="mt-1 text-sm text-slate-500">Household income, spending and savings in {currency}.</p></div><label className="text-sm text-slate-600">Month <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="ml-2 rounded-lg border border-slate-200 bg-white px-3 py-2" /></label></div>
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-      <div className="xl:col-span-2 xl:col-start-1 xl:row-start-1"><MetricCard title="Household net worth" value={formatMoney(financialSummary.netWorthMinor, currency)} detail={`${formatMoney(financialSummary.assetsMinor, currency)} assets − ${formatMoney(financialSummary.liabilitiesMinor, currency)} liabilities`} accent="blue" note="Accounts and other assets, less recorded liabilities." icon="netWorth" /></div>
-      <div className="xl:col-span-2 xl:col-start-3 xl:row-start-1"><MetricCard title="Income this month" value={formatMoney(current.income, currency)} detail={changeText(current.income, previous.income)} accent="emerald" icon="income" extra={<div className="space-y-1 border-t border-slate-100 pt-2">{[...memberNames].map(([uid, name]) => <p key={uid} className="flex justify-between gap-3 text-xs text-slate-500"><span>{name}</span><span className="font-medium text-slate-700">{formatMoney(memberIncome.get(uid) ?? 0, currency)}</span></p>)}</div>} />
-      </div>
-      <div className="xl:col-span-2 xl:col-start-1 xl:row-start-2"><MetricCard title="Expenses" value={formatMoney(current.expenses, currency)} detail={changeText(current.expenses, previous.expenses)} accent="amber" note={`Investment contributions: ${formatMoney(current.investments, currency)}`} icon="expenses" /></div>
-      <div className="xl:col-span-2 xl:col-start-3 xl:row-start-2"><MetricCard title="Saved" value={formatMoney(savings, currency)} detail={changeText(savings, previousSavings)} accent="violet" note="Income after ordinary expenses and investment contributions." icon="saved" /></div>
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 md:col-span-2 xl:col-span-2 xl:col-start-5 xl:row-span-2 xl:row-start-1">
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">Upcoming payments</h2><p className="mt-1 text-sm text-slate-500">Monthly bills and recurring payments</p></div><div className="ml-auto flex items-center gap-3"><span className="text-sm font-medium text-slate-600">{new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}</span><button type="button" onClick={() => { setShowPaymentForm((current) => !current); setPaymentError(""); }} aria-label={showPaymentForm ? "Close recurring payment form" : "Add recurring payment"} aria-expanded={showPaymentForm} className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-teal-700 text-white shadow-sm transition-all duration-200 hover:scale-110 hover:bg-teal-800 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2 active:scale-95" title={showPaymentForm ? "Close recurring payment form" : "Add recurring payment"}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className={`h-5 w-5 transition-transform duration-200 ${showPaymentForm ? "rotate-45" : ""}`}><path d="M12 5v14M5 12h14" /></svg></button></div></div>
-        <div className="mt-4 grid grid-cols-7 gap-1 text-center text-xs">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`} className="py-1 font-semibold text-slate-400">{day}</span>)}{Array.from({ length: firstWeekday }, (_, index) => <span key={`empty-${index}`} />)}{Array.from({ length: daysInMonth }, (_, index) => { const day = index + 1; const dueToday = paymentDates.some((payment) => payment.day === day); return <span key={day} className={`relative rounded-lg py-1.5 ${dueToday ? "bg-emerald-50 font-semibold text-emerald-800" : "text-slate-600"}`}>{day}{dueToday && <i className="absolute bottom-0.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-emerald-600" />}</span>; })}</div>
-        <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">{paymentDates.map((payment) => <div key={payment.id} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-medium">{payment.name}</p><p className="text-xs text-slate-500">Due {new Date(year, monthNumber - 1, payment.day).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {(payment.frequency ?? "monthly") === "monthly" ? "repeats monthly" : "one-time"}</p></div><div className="flex shrink-0 items-center gap-2"><span className="font-semibold">{formatMoney(payment.amountMinor, currency)}</span><EntityActions onDelete={() => onRequestDelete({ recordLabel: payment.name, description: "This will remove the payment from your household calendar.", onConfirm: () => onDeletePayment(payment.id) })} deleteLabel="Remove" /></div></div>)}{!paymentDates.length && <p className="text-sm text-slate-500">No payments due this month yet.</p>}</div>
-        {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-t border-slate-100 pt-4 sm:grid-cols-2"><input autoFocus required maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment" aria-label="Bill or payment name" className={inputClass} /><input required inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} />        <select value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value === "once" ? "once" : "monthly")} aria-label="Payment frequency" className={inputClass}><option value="monthly">Repeats every month</option><option value="once">Only this month</option></select><input required type="number" min="1" max="31" value={paymentDueDay} onChange={(event) => setPaymentDueDay(event.target.value)} aria-label="Due day of month" title="Due day of month" className={inputClass} /><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Add payment"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2">{paymentError}</p>}</form>}
+
+  async function markPaymentPaid(paymentId: string, dueDate: string) {
+    if (markingPayment) return;
+    setMarkingPayment(`${paymentId}-${dueDate}`);
+    try {
+      await onMarkPaymentPaid(paymentId, dueDate);
+    } catch (cause) {
+      setPaymentError(cause instanceof Error ? cause.message : "Could not mark this bill paid.");
+    } finally {
+      setMarkingPayment(null);
+    }
+  }
+
+  return <div className="space-y-6">
+    <div className="flex flex-wrap items-end justify-between gap-3">
+      <div><h1 className="text-2xl font-bold tracking-tight">{greeting ? `${greeting}, ${firstName}` : firstName}</h1><p className="mt-1 text-sm text-slate-500">Overview · Household finances for {new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })} · {currency}</p></div>
+      <label className="text-sm font-medium text-slate-600">Month <input type="month" value={selectedMonth} onChange={(event) => setMonth(event.target.value)} className="ml-2 rounded-lg border border-slate-200 bg-white px-3 py-2" /></label>
+    </div>
+
+    <div className="space-y-6">
+    <section aria-label="Monthly summary" className="grid gap-3 sm:grid-cols-3">
+      <MetricCard title="Net Worth" value={formatMoney(financialSummary.netWorthMinor, currency)} detail={canCompareNetWorth ? percentChangeLabel(currentMonthNetWorth, previousMonthNetWorth, "vs last month") : "Monthly history unavailable"} accent="blue" note={`${formatMoney(financialSummary.assetsMinor, currency)} assets · ${formatMoney(financialSummary.liabilitiesMinor, currency)} liabilities`} icon="netWorth" />
+      <MetricCard title="Income This Month" value={formatMoney(financialSummary.incomeMinor, currency)} detail={percentChangeLabel(financialSummary.incomeMinor, previousMonthSummary.incomeMinor, "vs last month")} accent="emerald" icon="income" />
+      <MetricCard title="Spent This Month" value={formatMoney(financialSummary.ordinaryExpensesMinor, currency)} detail={percentChangeLabel(financialSummary.ordinaryExpensesMinor, previousMonthSummary.ordinaryExpensesMinor, "vs last month")} accent="amber" note="Net of refunds; transfers and card payments are excluded." icon="expenses" />
+    </section>
+
+    <div className="grid min-w-0 gap-5 xl:grid-cols-2">
+      <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex items-center gap-3"><DashboardSectionIcon name="cashFlow" /><div><h2 className="font-bold">Cash Flow</h2><p className="mt-1 text-sm text-slate-500">Income, ordinary spending, and saved amount by month</p></div></div><div className="flex flex-wrap items-center gap-3"><div className="flex flex-wrap gap-3 text-xs text-slate-600"><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-emerald-600" />Income</span><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-blue-500" />Spent</span><span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full bg-violet-500" />Saved</span></div><div role="group" aria-label="Cash flow time range" className="inline-flex rounded-lg border border-slate-200 p-0.5">{([3, 6, 12] as const).map((range) => <button key={range} type="button" aria-pressed={cashFlowRange === range} onClick={() => setCashFlowRange(range)} className={`rounded-md px-2 py-1 text-xs font-medium ${cashFlowRange === range ? "bg-teal-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}>{range === 12 ? "1Y" : `${range}M`}</button>)}</div></div></div>
+        {monthly.every((item) => item.income === 0 && item.expenses === 0) ? <p className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No income or ordinary spending recorded in this period.</p> : <CashFlowLineChart monthly={monthly} currency={currency} />}
+      </section>
+
+      <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center gap-3"><DashboardSectionIcon name="category" /><div><h2 className="font-bold">Spending by Category</h2><p className="mt-1 text-sm text-slate-500">Ordinary expenses for {selectedMonth}; refunds reduce category totals.</p></div></div>
+        {spendingByCategory.length ? <div className="mt-5 grid gap-5 sm:grid-cols-[minmax(150px,0.9fr)_minmax(0,1.1fr)] sm:items-center"><div className="relative mx-auto aspect-square w-full max-w-[220px]"><svg viewBox="0 0 160 160" role="img" aria-label={`Spending total ${formatMoney(totalCategorySpend, currency)} by category`} className="h-full w-full -rotate-90">{visibleCategories.map(([category, amount], index) => {
+          const circumference = 2 * Math.PI * 58;
+          const length = positiveCategorySpend && amount > 0 ? amount / positiveCategorySpend * circumference : 0;
+          const offset = visibleCategories.slice(0, index).reduce((sum, [, priorAmount]) => sum + (positiveCategorySpend ? Math.max(0, priorAmount) / positiveCategorySpend * circumference : 0), 0);
+          return amount > 0 ? <circle key={category} cx="80" cy="80" r="58" fill="none" stroke={categoryPalette[index % categoryPalette.length]} strokeWidth="22" strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-offset} className="transition-all duration-500" /> : null;
+        })}</svg><div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center"><span className="text-lg font-bold text-slate-900">{formatMoney(totalCategorySpend, currency)}</span><span className="text-xs text-slate-500">Total spent</span></div></div><div className="space-y-3">{visibleCategories.map(([category, amount], index) => {
+          const percent = totalCategorySpend > 0 ? amount / totalCategorySpend * 100 : 0;
+          return <div key={category} className="flex min-w-0 items-center justify-between gap-2 text-sm"><span className="flex min-w-0 items-center gap-2"><i className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryPalette[index % categoryPalette.length] }} /><span className="truncate font-medium text-slate-800">{category === "MISC" ? "Miscellaneous" : category}</span></span><span className="shrink-0 text-right text-slate-600">{formatMoney(amount, currency)} <span className="text-slate-400">{Math.round(percent)}%</span></span></div>;
+        })}</div></div> : <p className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No ordinary spending recorded for this month.</p>}
       </section>
     </div>
-    <section className="dashboard-insights-chart rounded-2xl border border-slate-200 bg-white p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-bold">Expenses vs savings</h2><p className="mt-1 text-sm text-slate-500">Monthly totals for {year} · hover or focus a month for details</p></div><div className="flex gap-4 text-xs text-slate-500"><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-amber-500" />Expenses</span><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-emerald-600" />Savings</span></div></div><div className="mt-5 grid grid-cols-6 gap-3 sm:grid-cols-12">{monthly.map((item, index) => <div key={item.shortMonth} tabIndex={0} role="group" aria-label={`${item.month}: income ${formatMoney(item.income, currency)}, expenses ${formatMoney(item.expenses, currency)}, investment contributions ${formatMoney(item.investments, currency)}, saved ${formatMoney(item.savings, currency)}`} aria-describedby={`monthly-insight-${index}`} className="group relative min-w-0 rounded-lg text-center outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-52 -translate-x-1/2 rounded-xl border border-slate-700 bg-slate-900 p-3 text-left text-xs text-white shadow-xl group-hover:block group-focus:block"><p className="mb-2 font-semibold">{item.month} {year}</p><dl className="space-y-1.5"><div className="flex justify-between gap-3"><dt className="text-slate-300">Income</dt><dd className="font-medium">{formatMoney(item.income, currency)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-300">Ordinary expenses</dt><dd className="font-medium">{formatMoney(item.expenses, currency)}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-300">Investment contributions</dt><dd className="font-medium">{formatMoney(item.investments, currency)}</dd></div><div className="flex justify-between gap-3 border-t border-slate-700 pt-1.5"><dt className="text-slate-300">After expenses + investing</dt><dd className="font-semibold">{formatMoney(item.savings, currency)}</dd></div></dl><span id={`monthly-insight-${index}`} className="sr-only">Income, ordinary expenses, investment contributions, and amount after expenses and investing for {item.month} {year}.</span></div><div className="flex h-36 items-end justify-center gap-1 border-b border-slate-100"><div className="w-3 rounded-t bg-amber-500 transition-[height] duration-300 group-hover:bg-amber-600" style={{ height: `${Math.max(2, Math.max(0, item.expenses) / chartMax * 100)}%` }} /><div className="w-3 rounded-t bg-emerald-600 transition-[height] duration-300 group-hover:bg-emerald-700" style={{ height: `${Math.max(2, Math.max(0, item.savings) / chartMax * 100)}%` }} /></div><p className="mt-2 text-xs text-slate-500">{item.shortMonth}</p></div>)}</div></section>
-    <div className="grid gap-6 xl:grid-cols-2">
-      <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Goals</h2><button onClick={() => onOpen("Goals")} className="text-sm font-semibold text-emerald-700">Manage →</button></div><div className="mt-4 space-y-4">{finance.goals.slice(0, 4).map((goal) => { const progress = goalProgressPercent(goal.currentMinor, goal.targetMinor); const visibleWidth = progress > 0 ? Math.max(1, progress) : 0; const progressLabel = progress > 0 && progress < 1 ? "<1%" : `${Math.round(progress)}%`; return <div key={goal.id}><div className="flex justify-between gap-3 text-sm"><span className="font-medium">{goal.name}</span><span className="text-slate-500">{progressLabel}</span></div><div role="progressbar" aria-label={`${goal.name} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-600 transition-[width] duration-500" style={{ width: `${visibleWidth}%` }} /></div><p className="mt-1 text-xs text-slate-500">{formatMoney(goal.currentMinor, currency)} of {formatMoney(goal.targetMinor, currency)}{goal.deadline ? ` · due ${goal.deadline}` : ""}</p></div>; })}{!finance.goals.length && <p className="text-sm text-slate-500">No goals yet.</p>}</div></section>
-      <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Category budgets</h2><button onClick={() => onOpen("Budgets")} className="text-sm font-semibold text-emerald-700">Manage →</button></div><p className="mt-1 text-xs text-slate-500">This month’s ordinary debit transactions compared with each category limit.</p><div className="mt-4 space-y-4">{finance.budgets.filter((budget) => budget.month === month).map((budget) => { const progress = budgetProgress(budget, finance.transactions); return <div key={budget.id}><div className="flex justify-between gap-3 text-sm"><span className="font-medium">{budget.category}</span><span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}>{formatMoney(progress.spentMinor, currency)} / {formatMoney(budget.limitMinor, currency)}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${progress.overspent ? "bg-red-500" : "bg-amber-500"}`} style={{ width: `${Math.min(progress.percent, 100)}%` }} /></div><p className={`mt-1 text-xs ${progress.overspent ? "font-semibold text-red-700" : "text-slate-500"}`}>{progress.overspent ? `${formatMoney(Math.abs(progress.remainingMinor), currency)} over budget` : `${formatMoney(progress.remainingMinor, currency)} remaining`}</p></div>; })}{!finance.budgets.some((budget) => budget.month === month) && <p className="text-sm text-slate-500">No category budgets for this month.</p>}</div></section>
+
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><DashboardSectionIcon name="bills" /><div><h2 className="font-bold">Upcoming Bills</h2><p className="mt-1 text-sm text-slate-500">Scheduled payments for {new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}. Marking one paid adds an expense transaction.</p></div></div><PlusActionButton label={showPaymentForm ? "Close bill form" : "Add bill"} expanded={showPaymentForm} onClick={() => { if (!showPaymentForm && !paymentStartDate) setPaymentStartDate(`${selectedMonth}-01`); setShowPaymentForm((visible) => !visible); setPaymentError(""); }} /></div>
+      {paymentError && !showPaymentForm && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{paymentError}</p>}
+      {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-b border-slate-100 pb-5 sm:grid-cols-2 xl:grid-cols-6"><input autoFocus required disabled={savingPayment} maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment name" aria-label="Bill or payment name" className={inputClass} /><input required disabled={savingPayment} inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} /><select disabled={savingPayment} value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value as typeof paymentFrequency)} aria-label="Payment frequency" className={inputClass}><option value="monthly">Monthly</option><option value="biweekly">Every 2 weeks</option><option value="every6months">Every 6 months</option><option value="once">One time</option></select><input required disabled={savingPayment} type="date" value={paymentStartDate} onChange={(event) => setPaymentStartDate(event.target.value)} aria-label="First due date" className={inputClass} /><select required disabled={savingPayment} value={paymentCategory} onChange={(event) => setPaymentCategory(event.target.value)} aria-label="Expense category" className={inputClass}>{BUDGET_CATEGORIES.map((category) => <option key={category} value={category}>{category === "MISC" ? "Miscellaneous" : category}</option>)}</select><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Save bill"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2 xl:col-span-6">{paymentError}</p>}</form>}
+      {paymentDates.length ? <ul className="mt-4 divide-y divide-slate-100">{paymentDates.map((payment) => <li key={payment.occurrenceId} className="flex flex-wrap items-center justify-between gap-3 py-3"><div className="flex min-w-0 items-center gap-3"><button type="button" aria-label={`${payment.paid ? "Paid" : "Mark paid"}: ${payment.name} due ${formatDate(payment.dueDate)}`} aria-pressed={payment.paid} disabled={payment.paid || markingPayment !== null} onClick={() => void markPaymentPaid(payment.id, payment.dueDate)} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 disabled:cursor-default ${payment.paid ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 text-transparent hover:border-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"}`}><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="m4 10 4 4 8-8" /></svg></button><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{payment.name}</p><p className="mt-1 text-xs text-slate-500">Due {formatDate(payment.dueDate)} · {payment.frequency === "biweekly" ? "Every 2 weeks" : payment.frequency === "every6months" ? "Every 6 months" : payment.frequency === "once" ? "One time" : "Monthly"} · {payment.category === "MISC" ? "Miscellaneous" : payment.category ?? "Groceries"}</p></div></div><div className="flex items-center gap-3"><span className="text-sm font-semibold text-slate-800">{formatMoney(payment.amountMinor, currency)}</span><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${payment.paid ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-800"}`}>{payment.paid ? "Paid · added to transactions" : "Scheduled"}</span><EntityActions label={payment.name} onDelete={() => onRequestDelete({ recordLabel: payment.name, description: "This will remove the payment from your household calendar.", onConfirm: () => onDeletePayment(payment.id) })} deleteLabel="Remove" /></div></li>)}</ul> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No bills scheduled for this month. Add a bill to keep it on the household calendar.</p>}
+    </section>
+
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><DashboardSectionIcon name="transactions" /><div><h2 className="font-bold">Recent Transactions</h2><p className="mt-1 text-sm text-slate-500">Latest household records, newest first.</p></div></div><button type="button" onClick={() => onOpen("Transactions")} className="text-sm font-semibold text-teal-800 hover:text-teal-600">View all transactions →</button></div>
+      {recentTransactions.length ? <><div aria-hidden="true" className="mt-4 hidden grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto] gap-x-3 border-b border-slate-200 pb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 sm:grid"><span>Date</span><span>Description</span><span>Category</span><span>Account</span><span className="text-right">Amount</span></div><ul className="divide-y divide-slate-100">{recentTransactions.map((item) => {
+        const amountLabel = item.type === "credit" ? item.purpose === "ordinary" ? "−" : "+" : item.type === "debit" ? "−" : "↔";
+        const amountClass = item.type === "credit" && item.purpose === "ordinary" ? "text-amber-700" : item.type === "credit" ? "text-emerald-700" : item.type === "debit" ? "text-red-700" : "text-teal-700";
+        const account = finance.accounts.find((candidate) => candidate.id === item.accountId);
+        return <li key={item.id} className="grid grid-cols-2 gap-x-3 gap-y-1 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto] sm:items-center"><span className="text-xs text-slate-500">{formatDate(item.date)}</span><span className="col-span-2 truncate font-medium text-slate-900 sm:col-span-1">{item.description || item.category}</span><span className="truncate text-xs text-slate-500 sm:text-sm">{item.category}</span><span className="truncate text-xs text-slate-500 sm:text-sm">{account?.name ?? "—"}</span><span className={`col-start-2 row-start-1 text-right font-semibold sm:col-start-auto sm:row-start-auto ${amountClass}`}>{amountLabel}{formatMoney(item.amountMinor, currency)}</span></li>;
+      })}</ul></> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No transactions have been recorded yet.</p>}
+    </section>
     </div>
-    <section className="rounded-2xl border border-slate-200 bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-bold">Recent activity</h2><button onClick={() => onOpen("Transactions")} className="text-sm font-semibold text-emerald-700">View all →</button></div><div className="mt-3 divide-y divide-slate-100">{monthTransactions.slice(0, 6).map((item) => <div key={item.id} className="flex justify-between gap-3 py-3 text-sm"><div><p className="font-medium">{item.description || item.category}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.category} · {item.type === "credit" ? item.purpose === "ordinary" ? "Refund" : "Income" : item.type === "debit" ? "Expense" : "Transfer"} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><p className={item.type === "credit" && item.purpose === "ordinary" ? "font-semibold text-amber-700" : item.type === "credit" ? "font-semibold text-emerald-700" : item.type === "debit" ? "font-semibold text-red-700" : "font-semibold text-teal-700"}>{item.type === "credit" ? item.purpose === "ordinary" ? "−" : "+" : item.type === "debit" ? "−" : "↔"}{formatMoney(item.amountMinor, currency)}</p></div>)}{!monthTransactions.length && <p className="py-3 text-sm text-slate-500">No transactions for this month.</p>}</div></section>
-    <p className="text-xs text-slate-500">Savings are calculated as income minus expenses and investment contributions. Percentages compare with the prior month.</p>
-  </>;
+  </div>;
 }
 
 function financeMemberOptions(names: Map<string, string>, currentUid: string) {
@@ -1006,8 +1205,10 @@ function TransactionsSection({ finance, currency, householdId, uid, memberNames,
     <div className="flex flex-wrap items-end justify-between gap-3">
       <FeatureHeading section="Transactions" title="Transactions" description="Track household income, spending, and transfers." />
       <div className="flex flex-wrap items-center gap-2">
-        {!editing && <button type="button" aria-expanded={showEditor} aria-controls={showEditor ? "transaction-editor" : undefined} onClick={() => { setShowEditor((visible) => !visible); setError(""); }} className={`${showEditor ? secondaryButtonClass : buttonClass} inline-flex items-center gap-2`}><span aria-hidden="true" className="text-lg leading-none">{showEditor ? "−" : "+"}</span>{showEditor ? "Close form" : "Add transaction"}</button>}
-        <button type="button" onClick={() => setShowImport((visible) => !visible)} className={buttonClass}>{showImport ? "Close import" : "Import transactions"}</button>
+        {!editing ? <PlusActionButton label="Add transaction or import" actions={[
+          { label: "Add now", onSelect: () => { setShowEditor(true); setShowImport(false); setError(""); } },
+          { label: showImport ? "Close import" : "Import transactions", onSelect: () => { setShowImport((visible) => !visible); setShowEditor(false); setError(""); } },
+        ]} /> : <button type="button" onClick={() => setShowImport((visible) => !visible)} className={buttonClass}>{showImport ? "Close import" : "Import transactions"}</button>}
       </div>
     </div>
     {showImport && <TransactionImportFlow householdId={householdId} currency={currency} transactions={finance.transactions} onImported={onImportComplete} onClose={() => setShowImport(false)} />}

@@ -60,6 +60,7 @@ test("financial summary separates income, ordinary expenses, investment, and net
       transaction({ type: "credit", purpose: "income", amountMinor: 50000 }),
       transaction({ type: "debit", purpose: "ordinary", amountMinor: 12000 }),
       transaction({ type: "credit", purpose: "ordinary", amountMinor: 2500 }),
+      transaction({ type: "debit", purpose: "ordinary", category: "MISC", description: "Credit card payment", amountMinor: 20000 }),
       transaction({ type: "debit", purpose: "investment", amountMinor: 8000 }),
       transaction({ type: "transfer", purpose: "investment", transferDestination: "brokerage", amountMinor: 6000 }),
       transaction({ type: "credit", purpose: "income", date: "2026-09-30", amountMinor: 90000 }),
@@ -107,6 +108,7 @@ test("budget progress filters month, ordinary debits, and category and reports o
     transaction({ category: "Bills", amountMinor: 800 }),
     transaction({ date: "2026-09-30", amountMinor: 900 }),
     transaction({ purpose: "investment", amountMinor: 200 }),
+    transaction({ description: "Credit card payment", amountMinor: 2500 }),
   ]);
   assert.deepEqual(result, { spentMinor: 1700, remainingMinor: -200, percent: 113, overspent: true });
 });

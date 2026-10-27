@@ -1,5 +1,6 @@
 import {
   addDoc,
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
@@ -85,7 +86,7 @@ export async function loadHouseholdFinance(
   return { accounts, categories, transactions, budgets, goals, assets, liabilities, recurringPayments };
 }
 
-type RecurringPaymentInput = Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey">;
+type RecurringPaymentInput = Pick<RecurringPayment, "name" | "amountMinor" | "dueDay" | "frequency" | "monthKey" | "startDate" | "category">;
 
 export async function saveRecurringPayment(database: Firestore, householdId: string, actorUid: string, input: RecurringPaymentInput) {
   const name = input.name.trim();
@@ -93,22 +94,79 @@ export async function saveRecurringPayment(database: Firestore, householdId: str
   if (!Number.isInteger(input.dueDay) || input.dueDay < 1 || input.dueDay > 31) throw new Error("Choose a due day from 1 to 31.");
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor < 1) throw new Error("Payment amount must be greater than zero.");
   const frequency = input.frequency ?? "monthly";
-  if (frequency !== "monthly" && frequency !== "once") throw new Error("Choose a monthly or one-time payment.");
+  if (!["monthly", "biweekly", "every6months", "once"].includes(frequency)) throw new Error("Choose a supported payment frequency.");
   if (frequency === "once" && (!input.monthKey || !isMonthKey(input.monthKey))) {
     throw new Error("Choose the month for this one-time payment.");
   }
+  if ((frequency === "biweekly" || frequency === "every6months") && (!input.startDate || !isCalendarDate(input.startDate))) {
+    throw new Error("Choose a valid first due date for this recurring payment.");
+  }
+  if (input.startDate && !isCalendarDate(input.startDate)) throw new Error("Choose a valid first due date.");
+  const category = input.category ?? "Groceries";
+  if (!(BUDGET_CATEGORIES as readonly string[]).includes(category)) throw new Error("Choose a supported expense category for this bill.");
   const reference = doc(collection(database, ...path(householdId, "recurringPayments")));
   await setDoc(reference, {
     name,
     amountMinor: input.amountMinor,
     dueDay: input.dueDay,
+    category,
     frequency,
     ...(frequency === "once" ? { monthKey: input.monthKey } : {}),
+    ...(input.startDate ? { startDate: input.startDate } : {}),
+    paidDates: [],
     createdBy: actorUid,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
   return reference.id;
+}
+
+/** Marks one scheduled occurrence paid and records its expense atomically. */
+export async function markRecurringPaymentPaid(
+  database: Firestore,
+  householdId: string,
+  actorUid: string,
+  paymentId: string,
+  dueDate: string,
+) {
+  if (!isCalendarDate(dueDate)) throw new Error("The bill due date is invalid.");
+  const paymentReference = doc(database, ...path(householdId, "recurringPayments"), paymentId);
+  const transactionId = `bill-${paymentId}-${dueDate}`;
+  const transactionReference = doc(database, ...path(householdId, "transactions"), transactionId);
+  return runTransaction(database, async (databaseTransaction) => {
+    const [paymentSnapshot, expenseSnapshot] = await Promise.all([
+      databaseTransaction.get(paymentReference),
+      databaseTransaction.get(transactionReference),
+    ]);
+    if (!paymentSnapshot.exists()) throw new Error("This bill no longer exists.");
+    const payment = paymentSnapshot.data() as RecurringPayment;
+    if (payment.paidDates?.includes(dueDate)) return false;
+    if (expenseSnapshot.exists()) throw new Error("An expense already exists for this bill date; it was not duplicated.");
+    const category = payment.category ?? "Groceries";
+    if (!(BUDGET_CATEGORIES as readonly string[]).includes(category)) throw new Error("This bill has an unsupported expense category.");
+
+    databaseTransaction.update(paymentReference, {
+      paidDates: arrayUnion(dueDate),
+      updatedAt: serverTimestamp(),
+    });
+    databaseTransaction.set(transactionReference, {
+      type: "debit",
+      purpose: "ordinary",
+      transferDestination: null,
+      category,
+      description: payment.name,
+      amountMinor: payment.amountMinor,
+      date: dueDate,
+      accountId: null,
+      sourceAccountId: null,
+      ledgerApplied: false,
+      ownerUid: actorUid,
+      createdBy: actorUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  });
 }
 
 export async function deleteRecurringPayment(database: Firestore, householdId: string, paymentId: string) {
@@ -189,6 +247,16 @@ export type FinanceSummary = {
   availableToSpendMinor: number;
 };
 
+export function isCreditCardPaymentMovement(transaction: Pick<FinancialTransaction, "category" | "description">): boolean {
+  return /\b(?:(?:credit[\s-]*)?card|cc)\s+(?:payment|payoff)\b/i.test(`${transaction.category} ${transaction.description}`);
+}
+
+export function isOrdinaryExpenseTransaction(transaction: Pick<FinancialTransaction, "type" | "purpose" | "category" | "description">): boolean {
+  return transaction.purpose === "ordinary"
+    && (transaction.type === "debit" || transaction.type === "credit")
+    && !isCreditCardPaymentMovement(transaction);
+}
+
 export function calculateFinanceSummary(
   data: Pick<HouseholdFinanceData, "accounts" | "assets" | "liabilities" | "transactions">,
   month: string,
@@ -204,7 +272,7 @@ export function calculateFinanceSummary(
     .filter((item) => item.type === "credit" && item.purpose === "income")
     .reduce((sum, item) => sum + item.amountMinor, 0);
   const ordinaryExpensesMinor = currentTransactions
-    .filter((item) => item.purpose === "ordinary" && (item.type === "debit" || item.type === "credit"))
+    .filter(isOrdinaryExpenseTransaction)
     .reduce((sum, item) => sum + (item.type === "credit" ? -item.amountMinor : item.amountMinor), 0);
   const investmentContributionsMinor = currentTransactions
     .filter((item) => (item.type === "debit" || item.type === "transfer") && item.purpose === "investment")
@@ -601,8 +669,7 @@ export function budgetProgress(
     .filter((item) => ((budget.period ?? "monthly") === "yearly"
       ? item.date.startsWith(`${budget.month.slice(0, 4)}-`)
       : item.date.startsWith(`${budget.month}-`))
-      && item.purpose === "ordinary"
-      && (item.type === "debit" || item.type === "credit")
+      && isOrdinaryExpenseTransaction(item)
       && item.category === budget.category)
     .reduce((sum, item) => sum + (item.type === "credit" ? -item.amountMinor : item.amountMinor), 0);
   return {

@@ -317,13 +317,19 @@ service cloud.firestore {
 
     function validRecurringPayment(data, uid, isCreate) {
       return data.keys().hasAll(['name', 'amountMinor', 'dueDay', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['name', 'amountMinor', 'dueDay', 'frequency', 'monthKey', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'amountMinor', 'dueDay', 'frequency', 'monthKey', 'startDate', 'category', 'paidDates', 'createdBy', 'createdAt', 'updatedAt'])
         && validName(data.name, 80)
         && validAmount(data.amountMinor, false)
         && data.dueDay is int && data.dueDay >= 1 && data.dueDay <= 31
-        && (!('frequency' in data) || data.frequency in ['monthly', 'once'])
+        && (!('frequency' in data) || data.frequency in ['monthly', 'biweekly', 'every6months', 'once'])
         && (!('monthKey' in data) || (data.monthKey is string && data.monthKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')))
         && (!('frequency' in data) || data.frequency != 'once' || ('monthKey' in data && data.monthKey is string && data.monthKey.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')))
+        && (!('startDate' in data) || (data.startDate is string && data.startDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])$')))
+        && (!('frequency' in data) || !(data.frequency in ['biweekly', 'every6months']) || ('startDate' in data && data.startDate is string && data.startDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])$')))
+        && (!('category' in data) || validBudgetCategory(data.category))
+        && (!('paidDates' in data) || (data.paidDates is list && data.paidDates.size() <= 500))
+        && (isCreate || data.diff(resource.data).affectedKeys().hasOnly(['paidDates', 'updatedAt']))
+        && (!isCreate || !('paidDates' in data) || data.paidDates.size() == 0)
         && data.createdBy == (isCreate ? uid : resource.data.createdBy)
         && data.createdAt == (isCreate ? request.time : resource.data.createdAt)
         && data.updatedAt == request.time

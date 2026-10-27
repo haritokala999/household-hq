@@ -116,8 +116,11 @@ export type RecurringPayment = {
   name: string;
   amountMinor: number;
   dueDay: number;
-  frequency?: "monthly" | "once";
+  frequency?: "monthly" | "biweekly" | "every6months" | "once";
   monthKey?: string;
+  startDate?: string;
+  category?: string;
+  paidDates?: string[];
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;

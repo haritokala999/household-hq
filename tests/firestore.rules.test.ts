@@ -22,7 +22,7 @@ import {
 } from "firebase/firestore";
 import { getHouseholdsForUser } from "../src/lib/household-memberships";
 import { acceptHouseholdInvitation, createHouseholdInvitation } from "../src/lib/invitations";
-import { copyPreviousMonthBudgets, deleteAccount, deleteTransaction, saveTransaction } from "../src/lib/finance";
+import { copyPreviousMonthBudgets, deleteAccount, deleteTransaction, markRecurringPaymentPaid, saveRecurringPayment, saveTransaction } from "../src/lib/finance";
 import { DEFAULT_CATEGORIES, type FinancialTransaction, type MonthlyBudget } from "../src/lib/types";
 
 const projectId = "demo-household-hq";
@@ -378,6 +378,31 @@ test("authorized members can use financial records while unrelated users and unk
   await assertFails(getDoc(doc(mallory, "households", householdId, "goals", "alice-goal")));
   await assertSucceeds(getDocs(collection(alice, "households", householdId, "recurringPayments")));
   await assertFails(getDoc(doc(alice, "households", householdId, "recurringPayments", "bill", "paymentOccurrences", "october")));
+});
+
+test("recurring bill frequencies are authorized and marking an occurrence paid creates one expense", async () => {
+  await createHouseholdAtomically("alice");
+  const alice = testEnv.authenticatedContext("alice").firestore();
+  const paymentId = await saveRecurringPayment(alice as unknown as Firestore, householdId, "alice", {
+    name: "Weekly grocery run",
+    amountMinor: 7250,
+    dueDay: 2,
+    frequency: "biweekly",
+    startDate: "2026-10-02",
+    category: "Groceries",
+  });
+
+  assert.equal(await markRecurringPaymentPaid(alice as unknown as Firestore, householdId, "alice", paymentId, "2026-10-02"), true);
+  assert.equal(await markRecurringPaymentPaid(alice as unknown as Firestore, householdId, "alice", paymentId, "2026-10-02"), false);
+  const payment = await assertSucceeds(getDoc(doc(alice, "households", householdId, "recurringPayments", paymentId)));
+  assert.deepEqual(payment.data()?.paidDates, ["2026-10-02"]);
+  const expense = await assertSucceeds(getDoc(doc(alice, "households", householdId, "transactions", `bill-${paymentId}-2026-10-02`)));
+  assert.equal(expense.data()?.type, "debit");
+  assert.equal(expense.data()?.purpose, "ordinary");
+  assert.equal(expense.data()?.category, "Groceries");
+  assert.equal(expense.data()?.amountMinor, 7250);
+  assert.equal(expense.data()?.date, "2026-10-02");
+  await assertFails(updateDoc(doc(alice, "households", householdId, "recurringPayments", paymentId), { name: "Tampered bill" }));
 });
 
 test("household activity is immutable and last-seen timestamps are private to each member", async () => {
