@@ -98,6 +98,7 @@ const secondaryButtonClass = "rounded-lg border border-slate-300 px-3 py-2 text-
 const TRANSACTION_PAGE_SIZE = 10;
 const INVESTMENT_ACTIVITY_PAGE_SIZE = 8;
 const categoryOptionLabel = (category: string) => category === "MISC" ? "Miscellaneous" : category;
+const categoryPalette = ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"];
 const emptyFinance: HouseholdFinanceData = {
   accounts: [], categories: [], transactions: [], budgets: [], goals: [], assets: [], liabilities: [], recurringPayments: [],
 };
@@ -836,8 +837,15 @@ function NetWorthDetailsDialog({ finance, currency, memberNames, origin, onClose
   }, []);
   useEffect(() => {
     if (!ready) return;
-    const frame = window.requestAnimationFrame(() => setFlipped(true));
-    return () => window.cancelAnimationFrame(frame);
+    if (reducedMotionRef.current) {
+      setFlipped(true);
+      return;
+    }
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setFlipped(true));
+    });
+    return () => { window.cancelAnimationFrame(firstFrame); window.cancelAnimationFrame(secondFrame); };
   }, [ready]);
   const accounts = finance.accounts.filter((account) => !account.archived);
   const assetsTotal = accounts.reduce((sum, account) => sum + account.balanceMinor, 0)
@@ -1057,6 +1065,29 @@ function PlusActionButton({ label, onClick, actions, expanded = false }: { label
   </div>;
 }
 
+function CategorySpendDonut({ totals, netTotal, currency }: { totals: [string, number][]; netTotal: number; currency: string }) {
+  const positiveTotal = totals.reduce((sum, [, amount]) => sum + Math.max(0, amount), 0);
+  const circumference = 2 * Math.PI * 58;
+  const segments = totals.map(([category, amount], index) => ({
+    category,
+    index,
+    length: positiveTotal > 0 && amount > 0 ? amount / positiveTotal * circumference : 0,
+  }));
+  return <figure className="mx-auto w-full max-w-[220px]">
+    <div className="relative aspect-square">
+      <svg viewBox="0 0 160 160" role="img" aria-label={`Positive net spending by category. Net spent ${formatMoney(netTotal, currency)}.`} className="h-full w-full -rotate-90">
+        <circle cx="80" cy="80" r="58" fill="none" stroke="#e2e8f0" strokeWidth="22" />
+        {segments.map(({ category, index, length }) => {
+          const dashOffset = segments.slice(0, index).reduce((sum, segment) => sum + segment.length, 0);
+          return length > 0 ? <circle key={category} cx="80" cy="80" r="58" fill="none" stroke={categoryPalette[index % categoryPalette.length]} strokeWidth="22" strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-dashOffset} className="transition-all duration-500 motion-reduce:transition-none" /> : null;
+        })}
+      </svg>
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center"><span className="text-lg font-bold text-slate-900">{formatMoney(netTotal, currency)}</span><span className="text-xs text-slate-500">Net spent</span></div>
+    </div>
+    <figcaption className="mt-2 text-center text-xs text-slate-500">Slices show positive category spending; refunds are listed separately and reduce net spent.</figcaption>
+  </figure>;
+}
+
 function MonthlyMetricDetailsDialog({ title, value, month, currency, transactions, finance, memberNames, categoryTotals, origin, onClose }: {
   title: string;
   value: number;
@@ -1097,8 +1128,15 @@ function MonthlyMetricDetailsDialog({ title, value, month, currency, transaction
   }, []);
   useEffect(() => {
     if (!ready) return;
-    const frame = window.requestAnimationFrame(() => setFlipped(true));
-    return () => window.cancelAnimationFrame(frame);
+    if (reducedMotionRef.current) {
+      setFlipped(true);
+      return;
+    }
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setFlipped(true));
+    });
+    return () => { window.cancelAnimationFrame(firstFrame); window.cancelAnimationFrame(secondFrame); };
   }, [ready]);
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1126,7 +1164,7 @@ function MonthlyMetricDetailsDialog({ title, value, month, currency, transaction
   const transform = flipped
     ? "translate(-50%, -50%) scale(1) rotateY(180deg)"
     : `translate(calc(-50% + ${originX}px), calc(-50% + ${originY}px)) scale(${origin.width / target.width}, ${origin.height / target.height}) rotateY(0deg)`;
-  return <div role="presentation" className="net-worth-flip-overlay fixed inset-0 z-[70] bg-slate-950/55 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+  return createPortal(<div role="presentation" className="net-worth-flip-overlay fixed inset-0 z-[70] bg-slate-950/55 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
     <div className="net-worth-flip-shell" style={{ width: target.width, height: target.height, transform }} onTransitionEnd={(event) => { if (event.target === event.currentTarget && closing && !flipped) onCloseRef.current(); }}>
       <div aria-hidden="true" className="net-worth-flip-front"><span className="text-sm font-semibold text-slate-600">{title}</span><span className="text-2xl font-bold text-slate-900">{formatMoney(value, currency)}</span></div>
       <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="monthly-metric-title" className="net-worth-flip-back overflow-hidden rounded-3xl border border-white/70 bg-white shadow-2xl outline-none">
@@ -1135,7 +1173,7 @@ function MonthlyMetricDetailsDialog({ title, value, month, currency, transaction
           <button type="button" aria-label={`Close ${title} details`} onClick={close} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-xl text-white transition hover:rotate-90 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">×</button>
         </header>
         <div className="h-[calc(100%-11rem)] overflow-y-auto p-4 sm:p-6">
-          {categoryTotals ? categoryTotals.length ? <ul className="divide-y divide-slate-100">{categoryTotals.map(([category, amount], index) => <li key={category} className="flex items-center justify-between gap-3 py-4"><div className="flex min-w-0 items-center gap-3"><i aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"][index % 6] }} /><span className="truncate text-sm font-semibold text-slate-900">{category === "MISC" ? "Miscellaneous" : category}</span></div><p className={`shrink-0 text-sm font-semibold ${amount < 0 ? "text-emerald-700" : "text-slate-900"}`}>{amount < 0 ? "+" : ""}{formatMoney(Math.abs(amount), currency)}</p></li>)}</ul> : <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No spending by category for {monthLabel}.</p> : transactions.length ? <ul className="divide-y divide-slate-100">{transactions.map((transaction) => {
+          {categoryTotals ? categoryTotals.length ? <div className="grid items-center gap-6 sm:grid-cols-[minmax(180px,0.8fr)_minmax(0,1.2fr)]"><CategorySpendDonut totals={categoryTotals} netTotal={value} currency={currency} /><ul className="divide-y divide-slate-100">{categoryTotals.map(([category, amount], index) => <li key={category} className="flex items-center justify-between gap-3 py-4"><div className="flex min-w-0 items-center gap-3"><i aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: categoryPalette[index % categoryPalette.length] }} /><span className="truncate text-sm font-semibold text-slate-900">{category === "MISC" ? "Miscellaneous" : category}</span></div><p className={`shrink-0 text-sm font-semibold ${amount < 0 ? "text-emerald-700" : "text-slate-900"}`}>{amount < 0 ? "+" : ""}{formatMoney(Math.abs(amount), currency)}</p></li>)}</ul></div> : <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No spending by category for {monthLabel}.</p> : transactions.length ? <ul className="divide-y divide-slate-100">{transactions.map((transaction) => {
             const isRefund = transaction.type === "credit" && transaction.purpose === "ordinary";
             const account = finance.accounts.find((item) => item.id === transaction.accountId);
             const ownerName = memberNames.get(transaction.ownerUid) ?? "Household member";
@@ -1147,7 +1185,7 @@ function MonthlyMetricDetailsDialog({ title, value, month, currency, transaction
         </div>
       </section>
     </div>
-  </div>;
+  </div>, document.body);
 }
 
 function Dashboard({ finance, month, todayMonth, snapshotHistory, memberNames, setMonth, currency, profileName, onOpen, onRequestDelete, onAddPayment, onMarkPaymentPaid, onUnmarkPaymentPaid, onDeletePayment }: {
@@ -1212,7 +1250,6 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, memberNames, s
     .sort((a, b) => b[1] - a[1]);
   const totalCategorySpend = spendingByCategory.reduce((sum, [, amount]) => sum + amount, 0);
   const positiveCategorySpend = spendingByCategory.reduce((sum, [, amount]) => sum + Math.max(0, amount), 0);
-  const categoryPalette = ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"];
   const visibleCategories = spendingByCategory.length > 6
     ? [...spendingByCategory.slice(0, 5), ["Other", spendingByCategory.slice(5).reduce((sum, [, amount]) => sum + amount, 0)] as [string, number]]
     : spendingByCategory;
