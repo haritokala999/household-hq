@@ -4,20 +4,25 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "predev": "node scripts/prepare-ocr-assets.mjs",
     "build": "next build --webpack",
+    "prebuild": "node scripts/prepare-ocr-assets.mjs",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test tests/finance.test.ts tests/statement-import.test.ts",
-    "test:rules": "firebase emulators:exec --only firestore --project demo-household-hq \"tsx --test tests/firestore.rules.test.ts\""
+    "test": "node --import tsx --test tests/finance.test.ts tests/statement-import.test.ts tests/receipt.test.ts",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-household-hq \"node --import tsx --test tests/firestore.rules.test.ts\""
   },
   "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
     "csv-parse": "^7.0.3",
     "firebase": "^13.1.0",
     "firebase-admin": "^13.10.0",
+    "heic-to": "^1.5.2",
     "next": "16.4.3",
     "pdfjs-dist": "^6.4.299",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^6.0.0",

@@ -1,6 +1,6 @@
 
 import {
-  browserSessionPersistence,
+  browserLocalPersistence,
   createUserWithEmailAndPassword,
   getRedirectResult,
   setPersistence,
@@ -13,10 +13,18 @@ import {
 import { auth, googleProvider } from "@/lib/firebase";
 
 export async function signInWithGoogle() {
-  await setPersistence(auth, browserSessionPersistence);
+  await setPersistence(auth, browserLocalPersistence);
   googleProvider.setCustomParameters({
     prompt: "select_account",
   });
+
+  const isInstalledApp = typeof window !== "undefined"
+    && (window.matchMedia("(display-mode: standalone)").matches
+      || ((navigator as Navigator & { standalone?: boolean }).standalone === true));
+  if (isInstalledApp) {
+    await signInWithRedirect(auth, googleProvider);
+    return null;
+  }
 
   try {
     return await signInWithPopup(auth, googleProvider);
@@ -46,7 +54,7 @@ export async function signInWithEmail(
   email: string,
   password: string,
 ) {
-  await setPersistence(auth, browserSessionPersistence);
+  await setPersistence(auth, browserLocalPersistence);
   return signInWithEmailAndPassword(auth, email, password);
 }
 
@@ -55,7 +63,7 @@ export async function createEmailAccount(
   email: string,
   password: string,
 ) {
-  await setPersistence(auth, browserSessionPersistence);
+  await setPersistence(auth, browserLocalPersistence);
   const credential = await createUserWithEmailAndPassword(
     auth,
     email,

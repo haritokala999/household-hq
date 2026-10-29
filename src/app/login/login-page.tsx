@@ -2,6 +2,7 @@
 "use client";
 
 import Image from "next/image";
+import { onAuthStateChanged } from "firebase/auth";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -10,6 +11,7 @@ import {
   signInWithEmail,
   signInWithGoogle,
 } from "@/lib/auth";
+import { auth } from "@/lib/firebase";
 
 function getSignInErrorMessage(error: unknown) {
   const code =
@@ -60,10 +62,13 @@ export default function LoginPage() {
 
   useEffect(() => {
     let isMounted = true;
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (isMounted && user) router.replace("/");
+    });
 
     getGoogleRedirectResult()
       .then((result) => {
-        if (result) router.replace("/");
+        if (isMounted && result) router.replace("/");
       })
       .catch((err: unknown) => {
         if (isMounted) {
@@ -74,6 +79,7 @@ export default function LoginPage() {
 
     return () => {
       isMounted = false;
+      unsubscribe();
     };
   }, [router]);
 

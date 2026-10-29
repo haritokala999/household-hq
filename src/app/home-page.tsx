@@ -6,6 +6,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ConfirmationDialog, EntityActions } from "@/components/entity-actions";
+import ReceiptCapture from "@/components/receipt-capture";
 import { doc, getDoc } from "firebase/firestore";
 import { loadHouseholdActivity, markHouseholdActivitySeen, recordHouseholdActivity } from "@/lib/activity";
 import AuthGuard from "@/components/auth-guard";
@@ -70,6 +71,7 @@ import type {
   RecurringPayment,
 } from "@/lib/types";
 import type { CsvColumnMapping, ImportRow, ImportTransactionType } from "@/lib/statement-import";
+import type { ParsedReceiptDetails } from "@/lib/receipt-parser";
 import { HOUSEHOLD_CURRENCIES, HOUSEHOLD_CURRENCY_NAMES } from "@/lib/types";
 
 type Section = "Dashboard" | "Transactions" | "Budgets" | "Goals" | "Budgets & Goals" | "Investments" | "Household";
@@ -1510,6 +1512,9 @@ function TransactionsSection({ finance, currency, chartMonth, householdId, uid, 
   setEditing: (transaction?: FinancialTransaction) => void;
 }) {
   const [showImport, setShowImport] = useState(false);
+  const [showReceiptCapture, setShowReceiptCapture] = useState(false);
+  const [receiptImage, setReceiptImage] = useState<File | null>(null);
+  const [receiptWarnings, setReceiptWarnings] = useState<string[]>([]);
   const [showEditor, setShowEditor] = useState(Boolean(editing));
   const [transactionPage, setTransactionPage] = useState(1);
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -1575,6 +1580,7 @@ function TransactionsSection({ finance, currency, chartMonth, householdId, uid, 
         ownerUid,
       }, editing);
       setEditing(undefined);
+      setReceiptWarnings([]);
       setCategory("");
       setDescription("");
       setShowDescription(false);
@@ -1618,21 +1624,56 @@ function TransactionsSection({ finance, currency, chartMonth, householdId, uid, 
     setTransferDestination(editing?.transferDestination ?? null);
   }
 
+  function applyReceiptDetails(details: ParsedReceiptDetails) {
+    const warnings = ["OCR can make mistakes. Review each suggested field before saving.", ...details.warnings];
+    let amountValue = "";
+    if (details.amount) {
+      try {
+        amountValue = moneyInputValue(parseMoneyToMinorUnits(details.amount, currency), currency);
+      } catch {
+        warnings.push("The amount could not be entered in the household currency. Enter it manually.");
+      }
+    }
+
+    setEditing(undefined);
+    setType("debit");
+    setCategory(details.category && (TRANSACTION_CATEGORIES as readonly string[]).includes(details.category) ? details.category : "");
+    setDescription(details.merchant ?? "");
+    setShowDescription(true);
+    setAmount(amountValue);
+    setDate(details.date ?? "");
+    setAccountId("");
+    setShowLinkedAccount(false);
+    setTransferDestination(null);
+    setShowTransferDialog(false);
+    setReceiptWarnings(warnings);
+    setError("");
+    setShowReceiptCapture(false);
+    setReceiptImage(null);
+    setShowEditor(true);
+  }
+
   return (
     <>
     <div className="flex flex-wrap items-end justify-between gap-3">
       <FeatureHeading section="Transactions" title="Transactions" description="Track household income, spending, and transfers." />
       <div className="flex flex-wrap items-center gap-2">
         {!editing ? <PlusActionButton label="Add transaction or import" actions={[
-          { label: "Add now", onSelect: () => { setShowEditor(true); setShowImport(false); setError(""); } },
-          { label: showImport ? "Close import" : "Import transactions", onSelect: () => { setShowImport((visible) => !visible); setShowEditor(false); setError(""); } },
+          { label: "Add now", onSelect: () => { setShowEditor(true); setShowImport(false); setShowReceiptCapture(false); setReceiptImage(null); setReceiptWarnings([]); setError(""); } },
+          { label: showImport ? "Close import" : "Import transactions", onSelect: () => { setShowImport((visible) => !visible); setShowEditor(false); setShowReceiptCapture(false); setReceiptImage(null); setReceiptWarnings([]); setError(""); } },
+          { label: showReceiptCapture ? "Close receipt scanner" : "Scan receipt", onSelect: () => { setShowReceiptCapture((visible) => !visible); setShowImport(false); setShowEditor(false); setReceiptImage(null); setReceiptWarnings([]); setError(""); } },
         ]} /> : <button type="button" onClick={() => setShowImport((visible) => !visible)} className={buttonClass}>{showImport ? "Close import" : "Import transactions"}</button>}
       </div>
     </div>
+    {showReceiptCapture && <ReceiptCapture image={receiptImage} currency={currency} onImageChange={setReceiptImage} onUseDetails={applyReceiptDetails} onCancel={() => { setReceiptImage(null); setShowReceiptCapture(false); setReceiptWarnings([]); }} />}
     {showImport && <TransactionImportFlow householdId={householdId} currency={currency} transactions={finance.transactions} onImported={onImportComplete} onClose={() => setShowImport(false)} />}
     <div className={`grid gap-6 ${showEditor ? "xl:grid-cols-[1fr_1.3fr]" : ""}`}>
       {showEditor && <section id="transaction-editor" ref={editorRef} className="motion-panel-in edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-center gap-2"><span className="rounded-lg bg-emerald-50 p-2 text-emerald-700"><WorkspaceIcon section="Transactions" /></span><h2 className="font-bold">{editing ? "Edit transaction" : "Add a transaction"}</h2></div>
+        {receiptWarnings.length > 0 && <div role="status" className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+          <p className="font-semibold">Review the receipt suggestions before saving.</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">{receiptWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+        </div>}
         <p className="mt-1 text-xs text-slate-500">Paycheck allocations update the selected account separately from income.</p>
         <form onSubmit={submit} className="mt-4 space-y-3">
           <div className="grid grid-cols-2 gap-2">
@@ -1705,7 +1746,7 @@ function TransactionsSection({ finance, currency, chartMonth, householdId, uid, 
           </div>}
           <div className="flex gap-2">
             <button disabled={saving} className={buttonClass}>{saving ? "Saving…" : editing ? "Save" : "Add"}</button>
-            <button type="button" disabled={saving} onClick={() => { setEditing(undefined); setShowEditor(false); setType("debit"); setCategory(""); setDescription(""); setShowDescription(false); setShowLinkedAccount(false); setAmount(""); setAccountId(""); setError(""); }} className={secondaryButtonClass}>Cancel</button>
+            <button type="button" disabled={saving} onClick={() => { setEditing(undefined); setReceiptWarnings([]); setShowEditor(false); setType("debit"); setCategory(""); setDescription(""); setShowDescription(false); setShowLinkedAccount(false); setAmount(""); setAccountId(""); setError(""); }} className={secondaryButtonClass}>Cancel</button>
           </div>
           {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
         </form>
