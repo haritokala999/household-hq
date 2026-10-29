@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
@@ -99,6 +99,46 @@ const TRANSACTION_PAGE_SIZE = 10;
 const INVESTMENT_ACTIVITY_PAGE_SIZE = 8;
 const categoryOptionLabel = (category: string) => category === "MISC" ? "Miscellaneous" : category;
 const categoryPalette = ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"];
+
+function TransactionCategoryIcon({ category }: { category: string }) {
+  const value = category.toLowerCase();
+  const icon = value.includes("grocer") ? "groceries"
+    : value.includes("housing") || value.includes("utilities") ? "home"
+      : value.includes("shopping") ? "shopping"
+        : value.includes("entertainment") ? "entertainment"
+          : value.includes("eatout") || value.includes("restaurant") ? "dining"
+            : value.includes("transport") ? "transport"
+              : value.includes("travel") ? "travel"
+                : value.includes("health") || value.includes("fitness") ? "health"
+                  : value.includes("saving") || value.includes("investment") ? "savings"
+                    : value.includes("transfer") ? "transfer"
+                      : value.includes("paycheck") || value.includes("income") ? "income" : "other";
+  const colors: Record<string, string> = {
+    groceries: "bg-emerald-50 text-emerald-700", home: "bg-sky-50 text-sky-700",
+    shopping: "bg-violet-50 text-violet-700", entertainment: "bg-fuchsia-50 text-fuchsia-700",
+    dining: "bg-orange-50 text-orange-700", transport: "bg-blue-50 text-blue-700",
+    travel: "bg-cyan-50 text-cyan-700", health: "bg-rose-50 text-rose-700",
+    savings: "bg-teal-50 text-teal-700", transfer: "bg-indigo-50 text-indigo-700",
+    income: "bg-green-50 text-green-700", other: "bg-slate-100 text-slate-600",
+  };
+  return <span title={categoryOptionLabel(category)} aria-hidden="true" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-transform duration-200 hover:scale-110 hover:-rotate-6 hover:shadow-sm motion-reduce:transition-none ${colors[icon]}`}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+      {icon === "groceries" && <><path d="M4 10h16l-1.4 10H5.4L4 10Z" /><path d="m8 10 2-6m6 6-2-6M8 14v3m4-3v3m4-3v3" /></>}
+      {icon === "home" && <><path d="m3 11 9-7 9 7" /><path d="M5 10v10h14V10M9 20v-6h6v6" /></>}
+      {icon === "shopping" && <><path d="M5 8h14l-1 12H6L5 8Z" /><path d="M9 9V6a3 3 0 0 1 6 0v3" /></>}
+      {icon === "entertainment" && <><path d="M4 6h16v12H4z" /><path d="M8 6v2m0 4v2m0 4v2m8-14v2m0 4v2m0 4v2" /></>}
+      {icon === "dining" && <><path d="M6 3v7m-3-7v4a3 3 0 0 0 6 0V3m-3 7v11" /><path d="M16 3v18m0-18c3 2 4 6 0 9" /></>}
+      {icon === "transport" && <><path d="m5 11 2-5h10l2 5 2 2v5H3v-5l2-2Z" /><path d="M5 11h14M6 18v2m12-2v2M6 15h.01M18 15h.01" /></>}
+      {icon === "travel" && <><path d="m3 13 8-2 3-7 2 1-1 6 5 2 1 2-7-1-4 6-2-1 2-6-6 2-1-2Z" /></>}
+      {icon === "health" && <><path d="M20.8 8.8c0 5.2-8.8 11-8.8 11s-8.8-5.8-8.8-11a4.8 4.8 0 0 1 8.8-2.6 4.8 4.8 0 0 1 8.8 2.6Z" /><path d="M12 9v6m-3-3h6" /></>}
+      {icon === "savings" && <><circle cx="12" cy="12" r="8.5" /><path d="M14.8 9.5c-.5-.7-1.3-1-2.4-1-1.3 0-2.2.6-2.2 1.6 0 2.5 4.8 1 4.8 3.6 0 1.1-.9 1.8-2.5 1.8-1 0-2-.4-2.6-1.2M12 6.5v2m0 7v2" /></>}
+      {icon === "transfer" && <><path d="M4 8h14m-4-4 4 4-4 4M20 16H6m4-4-4 4 4 4" /></>}
+      {icon === "income" && <><path d="M12 4v12m-4-4 4 4 4-4" /><path d="M5 18v2h14v-2" /></>}
+      {icon === "other" && <><circle cx="6" cy="6" r="1" /><circle cx="12" cy="6" r="1" /><circle cx="18" cy="6" r="1" /><circle cx="6" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="18" cy="12" r="1" /><circle cx="6" cy="18" r="1" /><circle cx="12" cy="18" r="1" /><circle cx="18" cy="18" r="1" /></>}
+    </svg>
+  </span>;
+}
+
 const emptyFinance: HouseholdFinanceData = {
   accounts: [], categories: [], transactions: [], budgets: [], goals: [], assets: [], liabilities: [], recurringPayments: [],
 };
@@ -1031,13 +1071,13 @@ function CashFlowLineChart({ transactions, anchorMonth, currency, chartType = "l
         {chartType === "line" && <><circle cx={x(index)} cy={y(item.income)} r={activeIndex === index ? 6 : 4} fill="#0f9f78" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /><circle cx={x(index)} cy={y(item.expenses)} r={activeIndex === index ? 6 : 4} fill="#4388e8" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /><circle cx={x(index)} cy={y(item.income - item.expenses)} r={activeIndex === index ? 6 : 4} fill="#8b5cf6" stroke="white" strokeWidth="2" className="transition-all duration-200 motion-reduce:transition-none" /></>}
         <text x={x(index)} y="198" textAnchor="middle" className={`transition-colors duration-200 ${activeIndex === index ? "fill-teal-800 font-semibold" : "fill-slate-500"}`} fontSize="10">{item.month}</text>
       </g>)}
-    </svg>{activeIndex === null ? <p id="cash-flow-chart-detail" className="min-h-5 text-xs text-slate-400">Hover or focus a month to see its income, spending, and category breakdown. Select a month to keep it open.</p> : <div id="cash-flow-chart-detail" aria-live="polite" className="cash-flow-chart-detail grid gap-4 rounded-xl border border-teal-100 bg-teal-50/70 p-4 lg:grid-cols-[0.8fr_1.2fr]"><div><p className="text-sm font-semibold text-slate-800">{monthly[activeIndex].month} {monthly[activeIndex].year} breakdown</p><p className="mt-1 text-xs text-slate-600">Household totals for this month</p><div className="mt-3 space-y-2 text-sm">{(["income", "expenses", "saved"] as const).map((key) => <p key={key} className="flex items-center gap-2"><i aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${key === "income" ? "bg-emerald-600" : key === "expenses" ? "bg-blue-500" : "bg-violet-500"}`} /><span className="text-slate-700">{key === "income" ? "Income" : key === "expenses" ? "Expenses" : "Saved"}</span><strong className="ml-auto text-slate-900">{formatMoney(key === "income" ? monthly[activeIndex].income : key === "expenses" ? monthly[activeIndex].expenses : monthly[activeIndex].income - monthly[activeIndex].expenses, currency)}</strong></p>)}</div></div><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spending by category <span className="font-normal normal-case tracking-normal">· net of refunds</span></p>{monthly[activeIndex].categoryTotals.length ? <ul className="mt-2 grid gap-x-4 sm:grid-cols-2">{monthly[activeIndex].categoryTotals.map(([category, amount], index) => <li key={category} className="flex min-w-0 items-center justify-between gap-2 border-t border-teal-100/80 py-2 text-sm"><span className="flex min-w-0 items-center gap-2"><i aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ["#0f9f78", "#4388e8", "#f59e0b", "#8b5cf6", "#ec4899", "#94a3b8"][index % 6] }} /><span className="truncate text-slate-700">{category === "MISC" ? "Miscellaneous" : category}</span></span><strong className="shrink-0 text-slate-900">{formatMoney(amount, currency)}</strong></li>)}</ul> : <p className="mt-2 rounded-lg bg-white/70 p-3 text-xs text-slate-500">No expenses for this month.</p>}</div></div>}
+    </svg>{activeIndex === null ? <p id="cash-flow-chart-detail" className="min-h-5 text-xs text-slate-400">Select a month for its income, expenses, savings, and category breakdown.</p> : <div id="cash-flow-chart-detail" aria-live="polite" className="cash-flow-chart-detail grid gap-4 rounded-xl border border-teal-100 bg-teal-50/70 p-4 lg:grid-cols-[0.8fr_1.2fr]"><div><p className="text-sm font-semibold text-slate-800">{monthly[activeIndex].month} {monthly[activeIndex].year} breakdown</p><p className="mt-1 text-xs text-slate-600">Household totals for this month</p><div className="mt-3 space-y-2 text-sm">{(["income", "expenses", "saved"] as const).map((key) => <p key={key} className="flex items-center gap-2"><i aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${key === "income" ? "bg-emerald-600" : key === "expenses" ? "bg-blue-500" : "bg-violet-500"}`} /><span className="text-slate-700">{key === "income" ? "Income" : key === "expenses" ? "Expenses" : "Saved"}</span><strong className="ml-auto text-slate-900">{formatMoney(key === "income" ? monthly[activeIndex].income : key === "expenses" ? monthly[activeIndex].expenses : monthly[activeIndex].income - monthly[activeIndex].expenses, currency)}</strong></p>)}</div></div><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spending by category <span className="font-normal normal-case tracking-normal">· net of refunds</span></p>{monthly[activeIndex].categoryTotals.length ? <ul className="mt-2 grid gap-x-4 sm:grid-cols-2">{monthly[activeIndex].categoryTotals.map(([category, amount]) => <li key={category} className="flex min-w-0 items-center justify-between gap-2 border-t border-teal-100/80 py-2 text-sm"><span className="flex min-w-0 items-center gap-2"><TransactionCategoryIcon category={category} /><span className="truncate text-slate-700">{categoryOptionLabel(category)}</span></span><strong className="shrink-0 text-slate-900">{formatMoney(amount, currency)}</strong></li>)}</ul> : <p className="mt-2 rounded-lg bg-white/70 p-3 text-xs text-slate-500">No expenses for this month.</p>}</div></div>}
   </div>;
 }
 
 type PlusMenuAction = { label: string; onSelect: () => void };
 
-function PlusActionButton({ label, onClick, actions, expanded = false }: { label: string; onClick?: () => void; actions?: PlusMenuAction[]; expanded?: boolean }) {
+function PlusActionButton({ label, onClick, actions, expanded = false, controls, buttonRef }: { label: string; onClick?: () => void; actions?: PlusMenuAction[]; expanded?: boolean; controls?: string; buttonRef?: Ref<HTMLButtonElement> }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1058,34 +1098,64 @@ function PlusActionButton({ label, onClick, actions, expanded = false }: { label
   }, [open]);
   const hasMenu = Boolean(actions?.length);
   return <div ref={containerRef} className="relative inline-flex">
-    <button type="button" aria-label={label} aria-haspopup={hasMenu ? "menu" : undefined} aria-expanded={hasMenu ? open : expanded} title={label} onClick={() => hasMenu ? setOpen((value) => !value) : onClick?.()} className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-100 text-teal-800 shadow-sm transition hover:scale-105 hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 motion-reduce:transform-none">
-      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={`h-5 w-5 transition-transform ${open || expanded ? "rotate-45" : ""}`}><path d="M12 5v14M5 12h14" /></svg>
+    <button ref={buttonRef} type="button" aria-label={label} aria-haspopup={hasMenu ? "menu" : undefined} aria-expanded={hasMenu ? open : expanded} aria-controls={expanded ? controls : undefined} title={label} onClick={() => hasMenu ? setOpen((value) => !value) : onClick?.()} className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-teal-100 text-teal-800 shadow-sm transition hover:scale-105 hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 motion-reduce:transform-none">
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={`h-5 w-5 transition-transform duration-200 motion-reduce:transition-none ${open || expanded ? "rotate-45" : ""}`}><path d="M12 5v14M5 12h14" /></svg>
     </button>
     {open && actions && <div role="menu" aria-label={label} className="motion-pop-in absolute right-0 top-full z-30 mt-2 min-w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">{actions.map((action) => <button key={action.label} type="button" role="menuitem" onClick={() => { setOpen(false); action.onSelect(); }} className="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{action.label}</button>)}</div>}
   </div>;
 }
 
-function CategorySpendDonut({ totals, netTotal, currency }: { totals: [string, number][]; netTotal: number; currency: string }) {
-  const positiveTotal = totals.reduce((sum, [, amount]) => sum + Math.max(0, amount), 0);
-  const circumference = 2 * Math.PI * 58;
-  const segments = totals.map(([category, amount], index) => ({
-    category,
-    index,
-    length: positiveTotal > 0 && amount > 0 ? amount / positiveTotal * circumference : 0,
-  }));
-  return <figure className="mx-auto w-full max-w-[220px]">
-    <div className="relative aspect-square">
-      <svg viewBox="0 0 160 160" role="img" aria-label={`Positive net spending by category. Net spent ${formatMoney(netTotal, currency)}.`} className="h-full w-full -rotate-90">
-        <circle cx="80" cy="80" r="58" fill="none" stroke="#e2e8f0" strokeWidth="22" />
-        {segments.map(({ category, index, length }) => {
-          const dashOffset = segments.slice(0, index).reduce((sum, segment) => sum + segment.length, 0);
-          return length > 0 ? <circle key={category} cx="80" cy="80" r="58" fill="none" stroke={categoryPalette[index % categoryPalette.length]} strokeWidth="22" strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-dashOffset} className="transition-all duration-500 motion-reduce:transition-none" /> : null;
-        })}
-      </svg>
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center"><span className="text-lg font-bold text-slate-900">{formatMoney(netTotal, currency)}</span><span className="text-xs text-slate-500">Net spent</span></div>
+function CategorySpendTrendChart({ totals, transactions, month, currency }: { totals: [string, number][]; transactions: FinancialTransaction[]; month: string; currency: string }) {
+  const [hoveredDay, setHoveredDay] = useState<number | null>(null);
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const year = Number(month.slice(0, 4));
+  const monthNumber = Number(month.slice(5, 7));
+  const monthLength = new Date(year, monthNumber, 0).getDate();
+  const lastRecordedDay = Math.max(1, ...transactions.map((item) => Number(item.date.slice(8, 10))));
+  const dayCount = Math.min(monthLength, lastRecordedDay);
+  const dailyAmounts = Array.from({ length: dayCount }, (_, dayIndex) => transactions
+    .filter((transaction) => Number(transaction.date.slice(8, 10)) === dayIndex + 1)
+    .reduce((sum, transaction) => sum + (transaction.type === "credit" ? -transaction.amountMinor : transaction.amountMinor), 0));
+  const cumulativeAmounts = dailyAmounts.map((_, dayIndex) => dailyAmounts.slice(0, dayIndex + 1).reduce((sum, amount) => sum + amount, 0));
+  const plotLeft = 62;
+  const plotRight = 690;
+  const plotTop = 20;
+  const plotBottom = 184;
+  const spacing = dayCount > 1 ? (plotRight - plotLeft) / (dayCount - 1 + 0.84) : plotRight - plotLeft;
+  const inset = dayCount > 1 ? spacing * 0.42 : 0;
+  const x = (index: number) => dayCount < 2 ? (plotLeft + plotRight) / 2 : plotLeft + inset + index * spacing;
+  const dateLabel = (dayIndex: number) => new Date(year, monthNumber - 1, dayIndex + 1).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const minValue = Math.min(0, ...dailyAmounts);
+  const maxValue = Math.max(1, ...dailyAmounts);
+  const y = (amount: number) => plotTop + (maxValue - amount) / (maxValue - minValue || 1) * (plotBottom - plotTop);
+  const activeDay = hoveredDay ?? selectedDay ?? dayCount - 1;
+  const activeTotal = dailyAmounts[activeDay] ?? 0;
+  const ticks = [...new Set([0, ...Array.from({ length: Math.floor((dayCount - 1) / 7) }, (_, index) => (index + 1) * 7), dayCount - 1])];
+
+  return <section aria-label="Spending by category over time" className="mt-4">
+    <div className="mb-3 flex items-center gap-2 text-xs font-medium text-slate-600"><i aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-teal-600" />Total spent per day</div>
+    <svg viewBox="0 0 720 220" role="group" aria-label="Total spending by date this month" aria-describedby="category-spend-chart-detail" className="block h-auto w-full overflow-hidden">
+      {[0, 1, 2, 3].map((tick) => {
+        const amount = minValue + (maxValue - minValue) * (3 - tick) / 3;
+        const position = y(amount);
+        return <g key={tick}><line x1={plotLeft} x2={plotRight} y1={position} y2={position} stroke="#e2e8f0" strokeDasharray="3 5" /><text x={plotLeft - 7} y={position + 4} textAnchor="end" className="fill-slate-400" fontSize="10">{formatMoney(amount, currency)}</text></g>;
+      })}
+      {Array.from({ length: dayCount }, (_, dayIndex) => {
+        const step = dayCount > 1 ? spacing : plotRight - plotLeft;
+        const start = Math.max(plotLeft, x(dayIndex) - step * 0.42);
+        const width = dayCount > 1 ? Math.min(step * 0.84, plotRight - start) : step;
+        return <rect key={dayIndex} x={start} y={plotTop} width={width} height={plotBottom - plotTop} rx="5" fill={activeDay === dayIndex ? "#ccfbf1" : "transparent"} opacity={activeDay === dayIndex ? "0.7" : "1"} tabIndex={0} role="button" aria-pressed={selectedDay === dayIndex} aria-label={dateLabel(dayIndex) + ". Spent " + formatMoney(dailyAmounts[dayIndex], currency)} onMouseEnter={() => setHoveredDay(dayIndex)} onMouseLeave={() => setHoveredDay(null)} onFocus={() => setHoveredDay(dayIndex)} onBlur={() => setHoveredDay(null)} onClick={() => setSelectedDay((current) => current === dayIndex ? null : dayIndex)} onKeyDown={(event) => { if (event.key === "Escape") { setHoveredDay(null); setSelectedDay(null); (event.currentTarget as SVGRectElement).blur(); } else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedDay((current) => current === dayIndex ? null : dayIndex); } }} className="cursor-pointer outline-none" />;
+      })}
+      <polyline points={dailyAmounts.map((amount, index) => x(index) + "," + y(amount)).join(" ")} fill="none" stroke="#0f9f78" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" className="investment-chart-line" pointerEvents="none" />
+      <circle cx={x(activeDay)} cy={y(dailyAmounts[activeDay] ?? 0)} r="5" fill="#0f9f78" stroke="white" strokeWidth="2" pointerEvents="none" />
+      {ticks.map((dayIndex) => <text key={dayIndex} x={x(dayIndex)} y="204" textAnchor="middle" className="fill-slate-500" fontSize="10">{dateLabel(dayIndex)}</text>)}
+    </svg>
+    <div id="category-spend-chart-detail" aria-live="polite" className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-semibold text-slate-800">Spent on {dateLabel(activeDay)}</p><p className="mt-1 text-xs text-slate-500">Month to date: {formatMoney(cumulativeAmounts[activeDay] ?? 0, currency)}</p></div><strong className="text-sm text-slate-900">{formatMoney(activeTotal, currency)}</strong></div>
     </div>
-    <figcaption className="mt-2 text-center text-xs text-slate-500">Slices show positive category spending; refunds are listed separately and reduce net spent.</figcaption>
-  </figure>;
+    <div className="mt-5"><h3 className="text-sm font-semibold text-slate-800">Spending by category this month</h3><ul className="mt-2 divide-y divide-slate-100">{[...totals].sort((a, b) => b[1] - a[1]).map(([category, amount]) => <li key={category} className="flex items-center justify-between gap-3 py-3"><span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-700"><TransactionCategoryIcon category={category} /><span className="truncate">{categoryOptionLabel(category)}</span></span><span className={amount < 0 ? "text-sm font-semibold text-emerald-700" : "text-sm font-semibold text-slate-900"}>{amount < 0 ? "+" : ""}{formatMoney(Math.abs(amount), currency)}</span></li>)}</ul></div>
+    <p className="mt-2 text-xs text-slate-500">Daily totals reflect refunds. Category totals are below.</p>
+  </section>;
 }
 
 function MonthlyMetricDetailsDialog({ title, value, month, currency, transactions, finance, memberNames, categoryTotals, origin, onClose }: {
@@ -1173,12 +1243,12 @@ function MonthlyMetricDetailsDialog({ title, value, month, currency, transaction
           <button type="button" aria-label={`Close ${title} details`} onClick={close} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-xl text-white transition hover:rotate-90 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">×</button>
         </header>
         <div className="h-[calc(100%-11rem)] overflow-y-auto p-4 sm:p-6">
-          {categoryTotals ? categoryTotals.length ? <div className="grid items-center gap-6 sm:grid-cols-[minmax(180px,0.8fr)_minmax(0,1.2fr)]"><CategorySpendDonut totals={categoryTotals} netTotal={value} currency={currency} /><ul className="divide-y divide-slate-100">{categoryTotals.map(([category, amount], index) => <li key={category} className="flex items-center justify-between gap-3 py-4"><div className="flex min-w-0 items-center gap-3"><i aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: categoryPalette[index % categoryPalette.length] }} /><span className="truncate text-sm font-semibold text-slate-900">{category === "MISC" ? "Miscellaneous" : category}</span></div><p className={`shrink-0 text-sm font-semibold ${amount < 0 ? "text-emerald-700" : "text-slate-900"}`}>{amount < 0 ? "+" : ""}{formatMoney(Math.abs(amount), currency)}</p></li>)}</ul></div> : <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No spending by category for {monthLabel}.</p> : transactions.length ? <ul className="divide-y divide-slate-100">{transactions.map((transaction) => {
+          {categoryTotals ? categoryTotals.length ? <CategorySpendTrendChart totals={categoryTotals} transactions={transactions} month={month} currency={currency} /> : <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No spending by category for {monthLabel}.</p> : transactions.length ? <ul className="divide-y divide-slate-100">{transactions.map((transaction) => {
             const isRefund = transaction.type === "credit" && transaction.purpose === "ordinary";
             const account = finance.accounts.find((item) => item.id === transaction.accountId);
             const ownerName = memberNames.get(transaction.ownerUid) ?? "Household member";
             return <li key={transaction.id} className="flex items-center justify-between gap-3 py-3">
-              <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{transaction.description || transaction.category}</p><p className="mt-0.5 truncate text-xs text-slate-500">{new Date(`${transaction.date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · {transaction.category} · {ownerName}{account ? ` · ${account.name}` : ""}</p></div>
+              <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{transaction.description || transaction.category}</p><p className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-xs text-slate-500">{new Date(`${transaction.date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · <TransactionCategoryIcon category={transaction.category} /> {categoryOptionLabel(transaction.category)} · {ownerName}{account ? ` · ${account.name}` : ""}</p></div>
               <p className={`shrink-0 text-sm font-semibold ${isRefund ? "text-emerald-700" : title.startsWith("Income") ? "text-emerald-700" : "text-slate-900"}`}>{isRefund ? "+" : ""}{formatMoney(transaction.amountMinor, currency)}</p>
             </li>;
           })}</ul> : <p className="rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No matching transactions for {monthLabel}.</p>}
@@ -1356,18 +1426,18 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, memberNames, s
           const length = positiveCategorySpend && amount > 0 ? amount / positiveCategorySpend * circumference : 0;
           const offset = visibleCategories.slice(0, index).reduce((sum, [, priorAmount]) => sum + (positiveCategorySpend ? Math.max(0, priorAmount) / positiveCategorySpend * circumference : 0), 0);
           return amount > 0 ? <circle key={category} cx="80" cy="80" r="58" fill="none" stroke={categoryPalette[index % categoryPalette.length]} strokeWidth="22" strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-offset} className="transition-all duration-500" /> : null;
-        })}</svg><div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center"><span className="text-lg font-bold text-slate-900">{formatMoney(totalCategorySpend, currency)}</span><span className="text-xs text-slate-500">Total spent</span></div></div><div className="space-y-3">{visibleCategories.map(([category, amount], index) => {
+        })}</svg><div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center"><span className="text-lg font-bold text-slate-900">{formatMoney(totalCategorySpend, currency)}</span><span className="text-xs text-slate-500">Total spent</span></div></div><div className="space-y-3">{visibleCategories.map(([category, amount]) => {
           const percent = totalCategorySpend > 0 ? amount / totalCategorySpend * 100 : 0;
-          return <div key={category} className="flex min-w-0 items-center justify-between gap-2 text-sm"><span className="flex min-w-0 items-center gap-2"><i className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: categoryPalette[index % categoryPalette.length] }} /><span className="truncate font-medium text-slate-800">{category === "MISC" ? "Miscellaneous" : category}</span></span><span className="shrink-0 text-right text-slate-600">{formatMoney(amount, currency)} <span className="text-slate-400">{Math.round(percent)}%</span></span></div>;
+          return <div key={category} className="flex min-w-0 items-center justify-between gap-2 text-sm"><span className="flex min-w-0 items-center gap-2"><TransactionCategoryIcon category={category} /><span className="truncate font-medium text-slate-800">{categoryOptionLabel(category)}</span></span><span className="shrink-0 text-right text-slate-600">{formatMoney(amount, currency)} <span className="text-slate-400">{Math.round(percent)}%</span></span></div>;
         })}</div></div> : <p className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No expenses recorded for this month.</p>}
       </section>
     </div>
 
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><DashboardSectionIcon name="bills" /><div><h2 className="font-bold">Upcoming Bills</h2><p className="mt-1 text-sm text-slate-500">Scheduled payments for {new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}. Marking one paid adds an expense transaction.</p></div></div><PlusActionButton label={showPaymentForm ? "Close bill form" : "Add bill"} expanded={showPaymentForm} onClick={() => { if (!showPaymentForm && !paymentStartDate) setPaymentStartDate(`${selectedMonth}-01`); setShowPaymentForm((visible) => !visible); setPaymentError(""); }} /></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><DashboardSectionIcon name="bills" /><div><h2 className="font-bold">Upcoming Bills</h2><p className="mt-1 text-sm text-slate-500">Scheduled for {new Date(year, monthNumber - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}. Mark paid to record an expense.</p></div></div><PlusActionButton label={showPaymentForm ? "Close bill form" : "Add bill"} expanded={showPaymentForm} onClick={() => { if (!showPaymentForm && !paymentStartDate) setPaymentStartDate(`${selectedMonth}-01`); setShowPaymentForm((visible) => !visible); setPaymentError(""); }} /></div>
       {paymentError && !showPaymentForm && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{paymentError}</p>}
-      {showPaymentForm && <form onSubmit={submitPayment} className="mt-4 grid gap-2 border-b border-slate-100 pb-5 sm:grid-cols-2 xl:grid-cols-6"><input autoFocus required disabled={savingPayment} maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment name" aria-label="Bill or payment name" className={inputClass} /><input required disabled={savingPayment} inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} /><select disabled={savingPayment} value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value as typeof paymentFrequency)} aria-label="Payment frequency" className={inputClass}>{sortOptionsAlphabetically([{ value: "biweekly", label: "Every 2 weeks" }, { value: "every6months", label: "Every 6 months" }, { value: "monthly", label: "Monthly" }, { value: "once", label: "One time" }], (option) => option.label).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><input required disabled={savingPayment} type="date" value={paymentStartDate} onChange={(event) => setPaymentStartDate(event.target.value)} aria-label="First due date" className={inputClass} /><select required disabled={savingPayment} value={paymentCategory} onChange={(event) => setPaymentCategory(event.target.value)} aria-label="Expense category" className={inputClass}>{sortOptionsAlphabetically(BUDGET_CATEGORIES, categoryOptionLabel).map((category) => <option key={category} value={category}>{categoryOptionLabel(category)}</option>)}</select><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Save bill"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2 xl:col-span-6">{paymentError}</p>}</form>}
-      {paymentDates.length ? <ul className="mt-4 divide-y divide-slate-100">{paymentDates.map((payment) => <li key={payment.occurrenceId} className="flex flex-wrap items-center justify-between gap-3 py-3 transition-colors duration-300"><div className="flex min-w-0 items-center gap-3"><button type="button" aria-label={`${payment.paid ? "Undo paid status" : "Mark paid"}: ${payment.name} due ${formatDate(payment.dueDate)}`} aria-pressed={payment.paid} disabled={markingPayment !== null} onClick={() => payment.paid ? onRequestDelete({ recordLabel: payment.name, title: `Undo ${payment.name} payment?`, confirmLabel: "Undo payment", description: "This removes the expense transaction created for this bill occurrence and marks the bill unpaid.", onConfirm: () => onUnmarkPaymentPaid(payment.id, payment.dueDate) }) : void markPaymentPaid(payment.id, payment.dueDate)} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 disabled:cursor-wait disabled:opacity-60 ${payment.paid ? "border-emerald-600 bg-emerald-600 text-white hover:border-rose-500 hover:bg-rose-50 hover:text-rose-700" : "border-slate-300 text-transparent hover:border-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"}`}><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 transition-transform duration-200 ${payment.paid ? "scale-100" : "scale-75"}`}><path d="m4 10 4 4 8-8" /></svg></button><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{payment.name}</p><p className="mt-1 text-xs text-slate-500">Due {formatDate(payment.dueDate)} · {payment.frequency === "biweekly" ? "Every 2 weeks" : payment.frequency === "every6months" ? "Every 6 months" : payment.frequency === "once" ? "One time" : "Monthly"} · {payment.category === "MISC" ? "Miscellaneous" : payment.category ?? "Groceries"}</p></div></div><div className="flex items-center gap-3"><span className="text-sm font-semibold text-slate-800">{formatMoney(payment.amountMinor, currency)}</span><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${payment.paid ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-800"}`}>{payment.paid ? "Paid · added to transactions" : "Scheduled"}</span><EntityActions label={payment.name} onDelete={() => onRequestDelete({ recordLabel: payment.name, description: "This will remove the payment from your household calendar.", onConfirm: () => onDeletePayment(payment.id) })} deleteLabel="Remove" /></div></li>)}</ul> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No bills scheduled for this month. Add a bill to keep it on the household calendar.</p>}
+      {showPaymentForm && <form onSubmit={submitPayment} className="motion-panel-in mt-4 grid gap-2 border-b border-slate-100 pb-5 sm:grid-cols-2 xl:grid-cols-6"><input autoFocus required disabled={savingPayment} maxLength={80} value={paymentName} onChange={(event) => setPaymentName(event.target.value)} placeholder="Bill or payment name" aria-label="Bill or payment name" className={inputClass} /><input required disabled={savingPayment} inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder={`Amount (${currency})`} aria-label="Payment amount" className={inputClass} /><select disabled={savingPayment} value={paymentFrequency} onChange={(event) => setPaymentFrequency(event.target.value as typeof paymentFrequency)} aria-label="Payment frequency" className={inputClass}>{sortOptionsAlphabetically([{ value: "biweekly", label: "Every 2 weeks" }, { value: "every6months", label: "Every 6 months" }, { value: "monthly", label: "Monthly" }, { value: "once", label: "One time" }], (option) => option.label).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><input required disabled={savingPayment} type="date" value={paymentStartDate} onChange={(event) => setPaymentStartDate(event.target.value)} aria-label="First due date" className={inputClass} /><select required disabled={savingPayment} value={paymentCategory} onChange={(event) => setPaymentCategory(event.target.value)} aria-label="Expense category" className={inputClass}>{sortOptionsAlphabetically(BUDGET_CATEGORIES, categoryOptionLabel).map((category) => <option key={category} value={category}>{categoryOptionLabel(category)}</option>)}</select><button disabled={savingPayment} className={buttonClass}>{savingPayment ? "Adding…" : "Save bill"}</button>{paymentError && <p role="alert" className="text-sm text-red-700 sm:col-span-2 xl:col-span-6">{paymentError}</p>}</form>}
+      {paymentDates.length ? <ul className="mt-4 divide-y divide-slate-100">{paymentDates.map((payment) => <li key={payment.occurrenceId} className="flex flex-wrap items-center justify-between gap-3 py-3 transition-colors duration-300"><div className="flex min-w-0 items-center gap-3"><button type="button" aria-label={`${payment.paid ? "Undo paid status" : "Mark paid"}: ${payment.name} due ${formatDate(payment.dueDate)}`} aria-pressed={payment.paid} disabled={markingPayment !== null} onClick={() => payment.paid ? onRequestDelete({ recordLabel: payment.name, title: `Undo ${payment.name} payment?`, confirmLabel: "Undo payment", description: "This removes the expense transaction created for this bill occurrence and marks the bill unpaid.", onConfirm: () => onUnmarkPaymentPaid(payment.id, payment.dueDate) }) : void markPaymentPaid(payment.id, payment.dueDate)} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 disabled:cursor-wait disabled:opacity-60 ${payment.paid ? "border-emerald-600 bg-emerald-600 text-white hover:border-rose-500 hover:bg-rose-50 hover:text-rose-700" : "border-slate-300 text-transparent hover:border-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"}`}><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 transition-transform duration-200 ${payment.paid ? "scale-100" : "scale-75"}`}><path d="m4 10 4 4 8-8" /></svg></button><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{payment.name}</p><p className="mt-1 flex min-w-0 items-center gap-1.5 truncate text-xs text-slate-500">Due {formatDate(payment.dueDate)} · {payment.frequency === "biweekly" ? "Every 2 weeks" : payment.frequency === "every6months" ? "Every 6 months" : payment.frequency === "once" ? "One time" : "Monthly"} · <TransactionCategoryIcon category={payment.category ?? "Groceries"} /> {categoryOptionLabel(payment.category ?? "Groceries")}</p></div></div><div className="flex items-center gap-3"><span className="text-sm font-semibold text-slate-800">{formatMoney(payment.amountMinor, currency)}</span><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${payment.paid ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-800"}`}>{payment.paid ? "Paid · added to transactions" : "Scheduled"}</span><EntityActions label={payment.name} onDelete={() => onRequestDelete({ recordLabel: payment.name, description: "This will remove the payment from your household calendar.", onConfirm: () => onDeletePayment(payment.id) })} deleteLabel="Remove" /></div></li>)}</ul> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No bills scheduled for this month. Add a bill to keep it on the household calendar.</p>}
     </section>
 
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1376,7 +1446,7 @@ function Dashboard({ finance, month, todayMonth, snapshotHistory, memberNames, s
         const amountLabel = item.type === "credit" ? item.purpose === "ordinary" ? "−" : "+" : item.type === "debit" ? "−" : "↔";
         const amountClass = item.type === "credit" && item.purpose === "ordinary" ? "text-amber-700" : item.type === "credit" ? "text-emerald-700" : item.type === "debit" ? "text-red-700" : "text-teal-700";
         const account = finance.accounts.find((candidate) => candidate.id === item.accountId);
-        return <li key={item.id} className="grid grid-cols-2 gap-x-3 gap-y-1 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto] sm:items-center"><span className="text-xs text-slate-500">{formatDate(item.date)}</span><span className="col-span-2 truncate font-medium text-slate-900 sm:col-span-1">{item.description || item.category}</span><span className="truncate text-xs text-slate-500 sm:text-sm">{item.category}</span><span className="truncate text-xs text-slate-500 sm:text-sm">{account?.name ?? "—"}</span><span className={`col-start-2 row-start-1 text-right font-semibold sm:col-start-auto sm:row-start-auto ${amountClass}`}>{amountLabel}{formatMoney(item.amountMinor, currency)}</span></li>;
+        return <li key={item.id} className="grid grid-cols-2 gap-x-3 gap-y-1 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto] sm:items-center"><span className="text-xs text-slate-500">{formatDate(item.date)}</span><span className="col-span-2 truncate font-medium text-slate-900 sm:col-span-1">{item.description || item.category}</span><span className="inline-flex min-w-0 items-center gap-1.5 truncate text-xs text-slate-500 sm:text-sm"><TransactionCategoryIcon category={item.category} />{categoryOptionLabel(item.category)}</span><span className="truncate text-xs text-slate-500 sm:text-sm">{account?.name ?? "—"}</span><span className={`col-start-2 row-start-1 text-right font-semibold sm:col-start-auto sm:row-start-auto ${amountClass}`}>{amountLabel}{formatMoney(item.amountMinor, currency)}</span></li>;
       })}</ul></> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No transactions have been recorded yet.</p>}
     </section>
     </div>
@@ -1563,7 +1633,7 @@ function TransactionsSection({ finance, currency, chartMonth, householdId, uid, 
     <div className={`grid gap-6 ${showEditor ? "xl:grid-cols-[1fr_1.3fr]" : ""}`}>
       {showEditor && <section id="transaction-editor" ref={editorRef} className="motion-panel-in edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-center gap-2"><span className="rounded-lg bg-emerald-50 p-2 text-emerald-700"><WorkspaceIcon section="Transactions" /></span><h2 className="font-bold">{editing ? "Edit transaction" : "Add a transaction"}</h2></div>
-        <p className="mt-1 text-xs text-slate-500">Paycheck allocations increase the selected investment account. Record paycheck income separately.</p>
+        <p className="mt-1 text-xs text-slate-500">Paycheck allocations update the selected account separately from income.</p>
         <form onSubmit={submit} className="mt-4 space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-sm font-medium">Type
@@ -1582,7 +1652,7 @@ function TransactionsSection({ finance, currency, chartMonth, householdId, uid, 
             </label>
           </div>
           {type === "transfer" && <button type="button" onClick={() => setShowTransferDialog(true)} className="w-full rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left text-sm font-medium text-teal-800">Destination type: {transferDestination === "brokerage" ? "Brokerage" : transferDestination === "retirement" ? "401(k)" : transferDestination === "cash" ? "Cash" : "Choose an investment type"}</button>}
-          {type === "transfer" ? <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">Category: <span className="font-semibold">Paycheck transfer</span></p> : <label className="block text-sm font-medium">Category
+          {type === "transfer" ? <p className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700"><TransactionCategoryIcon category="Paycheck transfer" />Category: <span className="font-semibold">Paycheck transfer</span></p> : <label className="block text-sm font-medium"><span className="inline-flex items-center gap-1.5"><TransactionCategoryIcon category={category || "MISC"} />Category</span>
             <select required value={category} onChange={(event) => setCategory(event.target.value)} className={`${inputClass} mt-1`}>
               <option value="" disabled>Choose a category</option>
               {editing?.category && !(TRANSACTION_CATEGORIES as readonly string[]).includes(editing.category) && <option value={editing.category}>{editing.category} (existing)</option>}
@@ -1671,12 +1741,10 @@ function TransactionsSection({ finance, currency, chartMonth, householdId, uid, 
         <div className="mt-4 divide-y divide-slate-100">
           {visibleTransactions.map((item) => <div key={item.id} className="group -mx-2 flex flex-wrap items-center justify-between gap-3 rounded-xl px-2 py-3 transition-colors hover:bg-slate-50">
             <div className="flex min-w-0 items-center gap-3">
-              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${item.type === "credit" && item.purpose === "income" ? "bg-emerald-50 text-emerald-700" : item.type === "transfer" ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-700"}`}>
-                <WorkspaceIcon section="Transactions" />
-              </span>
+              <TransactionCategoryIcon category={item.category} />
               <div className="min-w-0">
                 <p className="truncate font-semibold">{item.description || item.category}</p>
-                <p className="mt-1 text-xs text-slate-500">{item.date} · {item.category} · {item.type === "credit" ? item.purpose === "ordinary" ? "Refund" : "Income" : item.type === "debit" ? "Expense" : "Transfer"} · for {memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")}</p>
+                <p className="mt-1 text-xs text-slate-500">{item.date} · {categoryOptionLabel(item.category)} · {item.type === "credit" ? item.purpose === "ordinary" ? "Refund" : "Income" : item.type === "debit" ? "Expense" : "Transfer"} · {memberNames.get(item.ownerUid) ?? (item.ownerUid === uid ? "You" : "Household member")}</p>
               </div>
             </div>
             <div className="flex items-center gap-2 rounded-lg transition-transform duration-200 group-hover:scale-[1.02]">
@@ -1928,11 +1996,11 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
   );
 
   return (
-    <section className="rounded-2xl border border-teal-200 bg-white p-5 shadow-sm" aria-label="Import transactions">
+    <section className="motion-panel-in rounded-2xl border border-teal-200 bg-white p-5 shadow-sm" aria-label="Import transactions">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="font-bold">Import transactions</h2>
-          <p className="mt-1 text-sm text-slate-600">Upload a Capital One text-based PDF statement or a CSV export. Review the dates, categories, and transactions before confirming. Imported transactions are not linked to an account.</p>
+          <p className="mt-1 text-sm text-slate-600">Upload a PDF or CSV to review and import transactions.</p>
         </div>
         <button type="button" onClick={() => { resetImport(); onClose(); }} className={secondaryButtonClass}>Cancel</button>
       </div>
@@ -1956,7 +2024,7 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
           <button type="button" onClick={resetImport} className="mt-2 text-xs font-semibold text-slate-500 underline">Cancel upload</button>
         </div>}
         {mappingRequired && <form onSubmit={submitMapping} className="mt-5 space-y-4 rounded-xl bg-slate-50 p-4">
-          <div><h3 className="font-semibold">Match your CSV columns</h3><p className="mt-1 text-sm text-slate-600">We could not recognize the column names. Choose which columns contain transaction details.</p></div>
+            <div><h3 className="font-semibold">Match your CSV columns</h3><p className="mt-1 text-sm text-slate-600">Choose the columns for date, description, and amount.</p></div>
           {sample.length > 0 && <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white"><table className="min-w-full text-left text-xs"><thead><tr>{headers.map((header, index) => <th key={index} className="px-2 py-2 font-semibold">{header || `Column ${index + 1}`}</th>)}</tr></thead><tbody>{sample.slice(0, 2).map((record, rowIndex) => <tr key={rowIndex} className="border-t border-slate-100">{headers.map((_, columnIndex) => <td key={columnIndex} className="max-w-36 truncate px-2 py-2">{record[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div>}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {(["date", "description", "amount", "debit", "credit", "postedDate", "type", "cardholder"] as const).map((field) => <label key={field} className="block text-sm font-medium">{field === "postedDate" ? "Posted date (optional)" : field === "cardholder" ? "Cardholder (optional)" : field === "debit" ? "Debit amount (optional)" : field === "credit" ? "Credit amount (optional)" : field === "type" ? "Transaction type (optional)" : `${field[0].toUpperCase()}${field.slice(1)}${field === "date" || field === "description" || field === "amount" ? " *" : ""}`}
@@ -2005,7 +2073,7 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
                         {sortOptionsAlphabetically([{ value: "debit", label: "Expense" }, { value: "income", label: "Income" }, { value: "refund", label: "Refund" }, { value: "payment", label: "Payment (skip)" }], (option) => option.label).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                       </select>
                     </label>
-                    <label className="text-xs font-medium text-slate-600">Category
+                    <label className="text-xs font-medium text-slate-600"><span className="inline-flex items-center gap-1.5"><TransactionCategoryIcon category={row.category} />Category</span>
                       <select aria-label={`Category row ${row.sourceRow}`} value={row.category} onChange={(event) => updateRow(row.sourceRow, { category: event.target.value })} className={`${inputClass} mt-1`}>
                         {sortOptionsAlphabetically(TRANSACTION_CATEGORIES, categoryOptionLabel).map((category) => <option key={category} value={category}>{categoryOptionLabel(category)}</option>)}
                       </select>
@@ -2013,7 +2081,7 @@ function TransactionImportFlow({ householdId, currency, transactions, onImported
                     {(row.postedDate || row.cardholder) && <p className="text-xs text-slate-500 md:col-span-2 xl:col-span-full">{row.postedDate && `Posted ${row.postedDate}`}{row.postedDate && row.cardholder ? " · " : ""}{row.cardholder && `Cardholder: ${row.cardholder}`}</p>}
                     {(row.warnings.length > 0 || duplicate || row.alreadyImported) && <div className="space-y-1 text-xs md:col-span-2 xl:col-span-full">
                       {row.warnings.map((warning, index) => <p key={index} className="text-amber-800">{warning}</p>)}
-                      {duplicate && <p className="text-amber-800">Possible duplicate: an existing transaction matches this date, account, amount, type, and description. Review before importing.</p>}
+                      {duplicate && <p className="text-amber-800">Possible duplicate. Check before importing.</p>}
                     </div>}
                   </div>
                 </div>
@@ -2082,7 +2150,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
             <div className="flex min-w-0 items-center gap-2">
               <span className="rounded-lg bg-teal-50 p-2 text-teal-700"><WorkspaceIcon section="Budgets" /></span><div><h2 className="font-bold">Budget progress</h2><p className="text-xs text-slate-500">Monthly progress for {month}; yearly progress accumulates across {month.slice(0, 4)}.</p></div>
             </div>
-            {!editing && <button ref={addBudgetButtonRef} type="button" aria-label={showEditor ? "Close budget form" : "Add budget"} aria-expanded={showEditor} aria-controls={showEditor ? "budget-editor" : undefined} onClick={() => { setShowEditor((open) => !open); setError(""); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xl font-semibold text-teal-800 transition hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{showEditor ? "−" : "+"}</button>}
+            {!editing && <PlusActionButton buttonRef={addBudgetButtonRef} label={showEditor ? "Close budget form" : "Add budget"} controls="budget-editor" expanded={showEditor} onClick={() => { setShowEditor((open) => !open); setError(""); }} />}
           </div>
           {showEditor && <section id="budget-editor" ref={editorRef} className="motion-panel-in edit-focus-target mt-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
               <div className="mb-3 font-semibold">{editing ? "Edit budget" : `Create a ${period} budget`}</div>
@@ -2093,7 +2161,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
                 <label className="block text-sm font-medium">{period === "monthly" ? "Monthly limit" : "Yearly limit"}<input required inputMode="decimal" value={limit} onChange={(event) => setLimit(event.target.value)} placeholder={`Amount (${currency})`} className={`${inputClass} mt-1`} /></label>
                 <div className="flex flex-wrap gap-2"><button disabled={savingBudget} className={buttonClass}>{savingBudget ? "Saving…" : editing ? "Save" : "Add"}</button><button type="button" disabled={savingBudget} onClick={() => { setEditing(undefined); setShowEditor(false); setCategory(""); setLimit(""); setPeriod("monthly"); setError(""); }} className={secondaryButtonClass}>Cancel</button>{!editing && <button type="button" disabled={!previousMonth || !previousMonthBudgetCount || copyingPreviousMonth} onClick={() => void copyPreviousMonth()} className={`${secondaryButtonClass} disabled:cursor-not-allowed disabled:opacity-50`}>{copyingPreviousMonth ? "Copying…" : "Copy prev month"}</button>}</div>
                 {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-                {!editing && <p className="text-xs text-slate-500">Copies all monthly category limits from {previousMonth || "the previous month"} into {month || "the selected month"}, updating matching categories and adding any missing ones.</p>}
+                {!editing && <p className="text-xs text-slate-500">Copies last month’s limits, updating matching categories and adding missing ones.</p>}
               </form>
           </section>}
           <div className="mt-4 flex justify-end">
@@ -2105,7 +2173,7 @@ function BudgetsSection({ finance, currency, month, setMonth, onSave, onCopyPrev
               const width = Math.min(progress.percent, 100);
               return <div key={budget.id} className="rounded-xl p-3 transition-colors hover:bg-slate-50">
                 <div className="flex justify-between gap-3 text-sm">
-                  <div className="flex items-center gap-2"><span className={`rounded-lg p-1.5 ${progress.overspent ? "bg-red-50 text-red-700" : "bg-teal-50 text-teal-700"}`}><WorkspaceIcon section="Budgets" /></span><div><span className="font-medium">{budget.category} <span className="text-xs font-normal text-slate-500">({(budget.period ?? "monthly")})</span></span><p className={`text-xs ${progress.overspent ? "text-red-700" : "text-slate-500"}`}>{progress.overspent ? `${formatMoney(Math.abs(progress.remainingMinor), currency)} over budget` : `${formatMoney(progress.remainingMinor, currency)} remaining`}</p></div></div>
+                  <div className="flex items-center gap-2"><TransactionCategoryIcon category={budget.category} /><div><span className="font-medium">{categoryOptionLabel(budget.category)} <span className="text-xs font-normal text-slate-500">({(budget.period ?? "monthly")})</span></span><p className={`text-xs ${progress.overspent ? "text-red-700" : "text-slate-500"}`}>{progress.overspent ? `${formatMoney(Math.abs(progress.remainingMinor), currency)} over budget` : `${formatMoney(progress.remainingMinor, currency)} remaining`}</p></div></div>
                   <span className={progress.overspent ? "font-semibold text-red-700" : "text-slate-600"}>{formatMoney(progress.spentMinor, currency)} / {formatMoney(budget.limitMinor, currency)}</span>
                 </div>
                 <div role="progressbar" aria-label={`${budget.category} budget used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={width} className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-[width] duration-500 ${progress.overspent ? "bg-red-500" : "bg-amber-500"}`} style={{ width: `${width}%` }} /></div>
@@ -2214,7 +2282,7 @@ function GoalsSection({ finance, currency, uid, memberNames, onSave, onAddProgre
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2"><span className="rounded-lg bg-teal-50 p-2 text-teal-700"><WorkspaceIcon section="Goals" /></span><h2 className="font-bold">Household goals</h2></div>
-          {!editing && <button ref={addGoalButtonRef} type="button" aria-label={showEditor ? "Close goal form" : "Add goal"} aria-expanded={showEditor} aria-controls={showEditor ? "goal-editor" : undefined} onClick={() => { setShowEditor((open) => !open); setError(""); }} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xl font-semibold text-teal-800 transition hover:bg-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600">{showEditor ? "−" : "+"}</button>}
+          {!editing && <PlusActionButton buttonRef={addGoalButtonRef} label={showEditor ? "Close goal form" : "Add goal"} controls="goal-editor" expanded={showEditor} onClick={() => { setShowEditor((open) => !open); setError(""); }} />}
         </div>
         {showEditor && <section id="goal-editor" ref={editorRef} className="motion-panel-in edit-focus-target mb-5 rounded-xl border border-teal-100 bg-teal-50/40 p-4">
           <div className="mb-3 font-semibold">{editing ? "Edit goal" : "Create a savings goal"}</div>
@@ -2294,6 +2362,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   const [balance, setBalance] = useState("");
   const [accountError, setAccountError] = useState("");
   const [savingAccount, setSavingAccount] = useState(false);
+  const [showAccountForm, setShowAccountForm] = useState(Boolean(editingAccount));
   const [savingManualValue, setSavingManualValue] = useState(false);
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const accountEditorRef = useEditFocus<HTMLFormElement>(editingAccount?.id);
@@ -2305,6 +2374,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
   const [manualValueAmount, setManualValueAmount] = useState("");
   const [manualValueType, setManualValueType] = useState<"assets" | "liabilities">("liabilities");
   const [editingManualValue, setEditingManualValue] = useState<ManualValueRecord>();
+  const [showManualValueForm, setShowManualValueForm] = useState(Boolean(editingManualValue));
   const [manualValueError, setManualValueError] = useState("");
   const [chartMonth, setChartMonth] = useState("");
   const [chartRange, setChartRange] = useState<ChartRange>("1y");
@@ -2322,6 +2392,8 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOwnerUid(uid);
   }, [uid]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setShowAccountForm(Boolean(editingAccount)); }, [editingAccount]);
   useEffect(() => {
     if (!editingAccount) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -2427,6 +2499,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
       await onSaveAccount({ name: name.trim(), kind, ownerUid, balanceMinor: editingAccount?.balanceMinor ?? parseMoneyToMinorUnits(balance, currency) }, editingAccount);
       setName("");
       setBalance("");
+      setShowAccountForm(false);
     } catch (cause) {
       setAccountError(cause instanceof Error ? cause.message : "Could not save the account.");
     } finally {
@@ -2470,6 +2543,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
       setEditingManualValue(undefined);
       setManualValueName("");
       setManualValueAmount("");
+      setShowManualValueForm(false);
     } catch (cause) {
       setManualValueError(cause instanceof Error ? cause.message : `Could not save the ${manualValueType === "assets" ? "asset" : "liability"}.`);
     } finally {
@@ -2481,7 +2555,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     <FeatureHeading section="Investments" title="Investments" description="Review account balances, compare performance, and record monthly snapshots." />
     <section className="group space-y-5 rounded-2xl border border-slate-200 bg-white p-6 transition-all duration-200 hover:border-teal-200 hover:shadow-md">
       <div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><span className="rounded-2xl bg-teal-50 p-3 text-teal-800 transition-transform duration-200 group-hover:scale-105"><WorkspaceIcon section="Investments" /></span><div><p className="text-sm font-medium text-slate-500">Total investments</p><p className="mt-1 text-4xl font-bold tracking-tight">{formatMoney(total, currency)}</p></div></div><div className="rounded-xl bg-emerald-50 px-4 py-3 text-right"><p className="text-xs font-medium text-emerald-800">Contributed this month</p><p className="mt-1 text-lg font-bold text-emerald-900">{formatMoney(monthlyInvestmentContribution, currency)}</p></div></div>
-      <p className="mt-3 text-sm text-slate-500">Account balances start with the opening amount and increase with paycheck allocations. Paycheck income is recorded separately.</p>
+      <p className="mt-3 text-sm text-slate-500">Balances are manual; paycheck allocations update accounts separately from income.</p>
     <section className="grid gap-4 lg:grid-cols-3">{columns.map((column) => {
       const columnAccounts = accounts.filter((account) => account.kind === column.kind);
       const columnTotal = columnAccounts.reduce((sum, account) => sum + account.balanceMinor, 0);
@@ -2500,7 +2574,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
         <div className="flex items-center gap-2"><span className="rounded-lg bg-indigo-50 p-2 text-indigo-700"><WorkspaceIcon section="Investments" /></span><div><h2 className="font-bold">Monthly investment balances</h2><p className="mt-1 text-sm text-slate-500">Hover or focus a month to compare Brokerage, 401(k), and Cash.</p></div></div>
         <div className="flex flex-wrap items-center gap-3"><div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-medium text-slate-600">{chartSeries.map((series) => <span key={series.kind} className="inline-flex items-center gap-2"><i aria-hidden="true" className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: series.color }} />{series.label}</span>)}</div><ChartRangeControls value={chartRange} onChange={setChartRange} label="Investment chart range" /></div>
       </div>
-      <p className="mt-2 text-xs text-slate-500">Past months use available saved snapshots; the current month uses latest balances. Missing snapshots show as —.</p>
+      <p className="mt-2 text-xs text-slate-500">Past months use snapshots; the current month uses latest balances. — means no snapshot.</p>
       {chartMonth ? <div className="investment-chart-container mt-4 overflow-x-auto rounded-xl p-2 sm:p-4">
         <svg viewBox="0 0 730 205" role="group" aria-label={`Interactive ${chartRange === "ytd" ? "year-to-date" : chartRange} grouped bar chart of investment balances`} className="h-64 min-w-[680px] w-full overflow-visible">
           {[0, 1, 2, 3].map((step) => {
@@ -2533,17 +2607,38 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
     </div>
     </section>
     <section className="grid gap-6 xl:grid-cols-2">
-      <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">{editingAccount ? "Edit account" : "Add an account"}</h2><p className="mt-1 text-xs text-slate-500">{editingAccount ? "Update account details while keeping its saved balance." : `Enter the opening balance for this account in ${currency}. Future balance changes are recorded as transfers.`}</p><form ref={accountEditorRef} onSubmit={submitAccount} className="mt-4 space-y-3"><input required disabled={savingAccount} maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} /><select disabled={savingAccount} value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="brokerage">Brokerage</option><option value="savings">Cash / Personal Savings</option><option value="retirement">Retirement / 401(k)</option></select><select disabled={savingAccount} value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select><input required disabled={Boolean(editingAccount) || savingAccount} inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Opening balance" className={`${inputClass} disabled:bg-slate-100 disabled:text-slate-500`} />{editingAccount && <p className="text-xs text-slate-500">Account balance is changed by recording transfers.</p>}<div className="flex gap-2"><button disabled={savingAccount} className={buttonClass}>{savingAccount ? "Saving…" : editingAccount ? "Save account" : "Add account"}</button>{editingAccount && <button type="button" disabled={savingAccount} onClick={() => { setEditingAccount(undefined); setName(""); setBalance(""); setAccountError(""); }} className={secondaryButtonClass}>Cancel</button>}</div>{accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}</form><div className="mt-5 border-t border-slate-100 pt-4"><h3 className="font-semibold">Household accounts</h3><div className="mt-2 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span><EntityActions onEdit={() => setEditingAccount(account)} onDelete={() => void removeAccount(account)} /></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div></div></section>
-      <section ref={manualValueEditorRef} className="motion-panel-in edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
-        <h2 className="font-bold">Household assets &amp; liabilities</h2>
-        <p className="mt-1 text-xs text-slate-500">Record assets and debts. Assets increase household net worth; liabilities reduce it.</p>
-        <form onSubmit={submitManualValue} className="mt-4 space-y-3">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div><h2 className="font-bold">Household accounts</h2><p className="mt-1 text-xs text-slate-500">Manage accounts and manually entered balances.</p></div>
+          {!editingAccount && <PlusActionButton label={showAccountForm ? "Close account form" : "Add account"} controls="account-editor" expanded={showAccountForm} onClick={() => { setShowAccountForm((open) => !open); setAccountError(""); }} />}
+        </div>
+        {showAccountForm || editingAccount ? <div id="account-editor" className="motion-panel-in mt-4 border-b border-slate-100 pb-5">
+          <h3 className="font-semibold">{editingAccount ? "Edit account" : "Add an account"}</h3>
+          <p className="mt-1 text-xs text-slate-500">{editingAccount ? "Update account details while keeping its saved balance." : "Enter an opening balance in " + currency + ". Later balance changes use transfers."}</p>
+          <form ref={accountEditorRef} onSubmit={submitAccount} className="mt-4 space-y-3">
+            <input required disabled={savingAccount} maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Account name" className={inputClass} />
+            <select disabled={savingAccount} value={kind} onChange={(event) => setKind(event.target.value as FinancialAccount["kind"])} className={inputClass}><option value="brokerage">Brokerage</option><option value="savings">Cash / Personal Savings</option><option value="retirement">Retirement / 401(k)</option></select>
+            <select disabled={savingAccount} value={ownerUid} onChange={(event) => setOwnerUid(event.target.value)} className={inputClass}>{financeMemberOptions(memberNames, uid)}</select>
+            <input required disabled={Boolean(editingAccount) || savingAccount} inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} placeholder="Opening balance" className={inputClass} />
+            {editingAccount && <p className="text-xs text-slate-500">Account balance is changed by recording transfers.</p>}
+            <div className="flex gap-2"><button disabled={savingAccount} className={buttonClass}>{savingAccount ? "Saving…" : editingAccount ? "Save account" : "Add account"}</button>{editingAccount && <button type="button" disabled={savingAccount} onClick={() => { setEditingAccount(undefined); setName(""); setBalance(""); setAccountError(""); }} className={secondaryButtonClass}>Cancel</button>}</div>
+            {accountError && <p role="alert" className="text-sm text-red-700">{accountError}</p>}
+          </form>
+        </div> : null}
+        <div className="mt-4 divide-y divide-slate-100">{finance.accounts.map((account) => <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{account.name}{account.archived ? " · archived" : ""}</p><p className="text-xs text-slate-500">{account.kind} · {memberNames.get(account.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(account.balanceMinor, currency)}</span><EntityActions onEdit={() => setEditingAccount(account)} onDelete={() => void removeAccount(account)} /></div></div>)}{!finance.accounts.length && <p className="py-3 text-sm text-slate-500">No accounts yet.</p>}</div>
+      </section>
+      <section ref={manualValueEditorRef} className="edit-focus-target rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div><h2 className="font-bold">Household assets &amp; liabilities</h2><p className="mt-1 text-xs text-slate-500">Record assets and debts. Assets increase household net worth; liabilities reduce it.</p></div>
+          {!editingManualValue && <PlusActionButton label={showManualValueForm ? "Close asset or liability form" : "Add asset or liability"} controls="manual-value-editor" expanded={showManualValueForm} onClick={() => { setShowManualValueForm((open) => !open); setManualValueError(""); }} />}
+        </div>
+        {showManualValueForm || editingManualValue ? <form id="manual-value-editor" onSubmit={submitManualValue} className="motion-panel-in mt-4 space-y-3">
           <label className="block text-sm font-medium">Record type<select value={manualValueType} onChange={(event) => setManualValueType(event.target.value as "assets" | "liabilities")} className={`${inputClass} mt-1`}><option value="assets">Asset</option><option value="liabilities">Liability</option></select></label>
           <input required maxLength={80} value={manualValueName} onChange={(event) => setManualValueName(event.target.value)} placeholder={manualValueType === "assets" ? "Asset name (e.g. home, vehicle)" : "Debt name (e.g. car loan)"} className={inputClass} />
           <div className="flex gap-2"><input required disabled={savingManualValue} inputMode="decimal" value={manualValueAmount} onChange={(event) => setManualValueAmount(event.target.value)} placeholder={`Current value (${currency})`} className={inputClass} /><button disabled={savingManualValue} className={buttonClass}>{savingManualValue ? "Saving…" : editingManualValue ? "Save" : "Add"}</button></div>
-          {editingManualValue && <button type="button" onClick={() => { setEditingManualValue(undefined); setManualValueName(""); setManualValueAmount(""); }} className={secondaryButtonClass}>Cancel</button>}
+          {(editingManualValue || showManualValueForm) && <button type="button" onClick={() => { setEditingManualValue(undefined); setManualValueName(""); setManualValueAmount(""); setManualValueError(""); setShowManualValueForm(false); }} className={secondaryButtonClass}>Cancel</button>}
           {manualValueError && <p role="alert" className="text-sm text-red-700">{manualValueError}</p>}
-        </form>
+        </form> : null}
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           {([
             { group: "assets", title: "Household assets", records: finance.assets },
@@ -2552,7 +2647,7 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
             <div key={group} className="border-t border-slate-100 pt-4">
               <h3 className="font-semibold">{title}</h3>
               <div className="mt-2 divide-y divide-slate-100">
-                {records.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-slate-500">{memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(item.amountMinor, currency)}</span>{item.ownerUid === uid && <EntityActions onEdit={() => { setManualValueType(group); setEditingManualValue(item); setManualValueName(item.name); setManualValueAmount(moneyInputValue(item.amountMinor, currency)); }} onDelete={() => onRequestDelete({ recordLabel: item.name, description: `This ${group === "assets" ? "asset" : "liability"} will be removed from household net worth calculations.`, onConfirm: () => onDeleteManualValue(group, item.id) })} />}</div></div>)}
+                {records.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-2"><div><p className="text-sm font-medium">{item.name}</p><p className="text-xs text-slate-500">{memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{formatMoney(item.amountMinor, currency)}</span>{item.ownerUid === uid && <EntityActions onEdit={() => { setManualValueType(group); setEditingManualValue(item); setShowManualValueForm(true); setManualValueName(item.name); setManualValueAmount(moneyInputValue(item.amountMinor, currency)); }} onDelete={() => onRequestDelete({ recordLabel: item.name, description: `This ${group === "assets" ? "asset" : "liability"} will be removed from household net worth calculations.`, onConfirm: () => onDeleteManualValue(group, item.id) })} />}</div></div>)}
                 {!records.length && <p className="py-3 text-sm text-slate-500">No {group} added.</p>}
               </div>
             </div>
@@ -2560,10 +2655,10 @@ function InvestmentsSection({ finance, currency, uid, memberNames, darkMode, sna
         </div>
       </section>
     </section>
-    <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Recent investment activity</h2><p className="mt-1 text-xs text-slate-500">Includes account additions and balance changes, plus investment contributions and transfers. Account balances are not counted as transactions.</p><div className="mt-3 divide-y divide-slate-100">{visibleInvestmentActivity.map((item) => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div className="min-w-0"><p className="font-medium">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.detail} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><p className="font-semibold text-teal-800">{formatMoney(item.amountMinor, currency)}</p>{item.kind === "transaction" ? <EntityActions onEdit={() => onEditTransaction(item.transaction)} onDelete={() => onRequestDelete({ recordLabel: item.title, description: item.transaction.type === "transfer" ? "This transfer and its linked account balance changes will be reversed." : "This investment contribution will be permanently removed.", onConfirm: () => onDeleteTransaction(item.transaction.id) })} /> : <EntityActions onEdit={() => setEditingAccount(item.account)} onDelete={() => void removeAccount(item.account)} />}</div></div>)}{!recentInvestmentActivity.length && <p className="py-3 text-sm text-slate-500">No investment activity recorded yet.</p>}</div><PaginationControls page={safeInvestmentActivityPage} pageCount={investmentActivityPageCount} total={recentInvestmentActivity.length} pageSize={INVESTMENT_ACTIVITY_PAGE_SIZE} label="Investment activity" onPageChange={setInvestmentActivityPage} /></section>
+    <section className="rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-bold">Recent investment activity</h2><p className="mt-1 text-xs text-slate-500">Account updates, contributions, and transfers.</p><div className="mt-3 divide-y divide-slate-100">{visibleInvestmentActivity.map((item) => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div className="min-w-0"><p className="font-medium">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.date} · {item.detail} · {memberNames.get(item.ownerUid) ?? "Member"}</p></div><div className="flex items-center gap-2"><p className="font-semibold text-teal-800">{formatMoney(item.amountMinor, currency)}</p>{item.kind === "transaction" ? <EntityActions onEdit={() => onEditTransaction(item.transaction)} onDelete={() => onRequestDelete({ recordLabel: item.title, description: item.transaction.type === "transfer" ? "This transfer and its linked account balance changes will be reversed." : "This investment contribution will be permanently removed.", onConfirm: () => onDeleteTransaction(item.transaction.id) })} /> : <EntityActions onEdit={() => setEditingAccount(item.account)} onDelete={() => void removeAccount(item.account)} />}</div></div>)}{!recentInvestmentActivity.length && <p className="py-3 text-sm text-slate-500">No investment activity recorded yet.</p>}</div><PaginationControls page={safeInvestmentActivityPage} pageCount={investmentActivityPageCount} total={recentInvestmentActivity.length} pageSize={INVESTMENT_ACTIVITY_PAGE_SIZE} label="Investment activity" onPageChange={setInvestmentActivityPage} /></section>
     <section className="rounded-2xl border border-slate-200 bg-white p-5">
       <h2 className="font-bold">Add a monthly snapshot</h2>
-      <p className="mt-1 text-xs text-slate-500">Historical snapshots are saved at the bottom of this page and preserve existing monthly records.</p>
+      <p className="mt-1 text-xs text-slate-500">Snapshots preserve each month’s balance history.</p>
       <form onSubmit={submitSnapshot} className="mt-4 grid gap-2 sm:grid-cols-[1.4fr_1fr_1fr_auto]"><select required disabled={savingSnapshot} value={snapshotAccount} onChange={(event) => setSnapshotAccount(event.target.value)} className={inputClass}><option value="">Choose account</option>{sortOptionsAlphabetically(accounts, (account) => `${account.name} · ${memberNames.get(account.ownerUid) ?? "Member"}`).map((account) => <option key={account.id} value={account.id}>{account.name} · {memberNames.get(account.ownerUid) ?? "Member"}</option>)}</select><input required disabled={savingSnapshot} aria-label="Snapshot month" type="month" value={snapshotMonth} onChange={(event) => setSnapshotMonth(event.target.value)} className={inputClass} /><input required disabled={savingSnapshot} aria-label="Snapshot balance" inputMode="decimal" value={snapshotAmount} onChange={(event) => setSnapshotAmount(event.target.value)} placeholder="Historical balance" className={inputClass} /><button disabled={savingSnapshot} className={buttonClass}>{savingSnapshot ? "Saving…" : "Save snapshot"}</button></form>{snapshotError && <p role="alert" className="mt-2 text-sm text-red-700">{snapshotError}</p>}
     </section>
   </div>;
@@ -2706,7 +2801,7 @@ function HouseholdSection({ householdName, uid, households, activeHouseholdId, d
       </section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold">{householdName}</h2>
-        <p className="mt-2 text-sm text-slate-600">Household data is shared with every active member. Each record also tracks its creator and, where relevant, its owner.</p>
+        <p className="mt-2 text-sm text-slate-600">Active members share household data; records track their creator and owner.</p>
         <p className="mt-4 text-xs text-slate-500">Your account ID</p>
         <p className="mt-1 break-all rounded-lg bg-slate-50 p-3 font-mono text-sm">{uid}</p>
         <h3 className="mt-6 font-semibold">Members</h3>
@@ -2749,7 +2844,7 @@ function HouseholdSection({ householdName, uid, households, activeHouseholdId, d
       </section>
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <h2 className="font-bold">Invite a household member</h2>
-        <p className="mt-2 text-sm text-slate-600">Create a private {INVITATION_CODE_LENGTH}-character invitation code and share it directly with the new member. They need an account, but their email does not need to be verified. The code expires after {INVITATION_LIFETIME_DAYS} days and works once, so share it securely.</p>
+        <p className="mt-2 text-sm text-slate-600">Create a one-time private code that expires in {INVITATION_LIFETIME_DAYS} days. Share it directly; invitees need an account, but not a verified email.</p>
         {isOwner ? <form onSubmit={onInvite} className="mt-4 space-y-3"><button className={buttonClass}>Create invitation code</button></form> : <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Only the household owner can create invitations.</p>}
         {invitationCode && <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-sm font-semibold text-emerald-900">Share this private invitation code</p><code className="mt-2 block break-all font-mono text-xl font-bold">{invitationCode}</code><button onClick={() => void copyCode()} className={`${secondaryButtonClass} mt-3`}>{copied ? "Copied" : "Copy code"}</button></div>}
       </section>

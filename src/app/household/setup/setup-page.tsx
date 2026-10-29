@@ -126,7 +126,7 @@ export default function HouseholdSetupPage() {
             )}
             <div className="mt-8 border-t border-slate-100 pt-6">
               <h2 className="font-semibold">Joining an existing household?</h2>
-              <p className="mt-2 text-xs text-slate-500">Enter the private {INVITATION_CODE_LENGTH}-character code shared by the household owner. Your account email does not need to be verified.</p>
+              <p className="mt-2 text-xs text-slate-500">Enter the private owner code. Email verification isn’t required.</p>
               <form onSubmit={handleJoin} className="mt-4 space-y-3">
                 <label htmlFor="invitation-code" className="block text-sm font-medium">Invitation code</label>
                 <input id="invitation-code" required autoCapitalize="none" autoCorrect="off" spellCheck={false} pattern="[A-Za-z0-9_-]{22}" maxLength={INVITATION_CODE_LENGTH} value={invitationCode} onChange={(event) => setInvitationCode(event.target.value.replace(/[^A-Za-z0-9_-]/g, "").slice(0, INVITATION_CODE_LENGTH))} placeholder="Paste private invitation code" className="w-full rounded-xl border border-slate-300 px-3 py-2.5 font-mono text-sm outline-none focus:border-emerald-600" />

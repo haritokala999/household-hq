@@ -41,7 +41,7 @@ export type ParsedStatement = {
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_CSV_ROWS = 1001;
 const MAX_DESCRIPTION_LENGTH = 240;
-const PAYMENT_PATTERN = /\b(payment received|payment\s*[-:]\s*thank you|payment thank you|autopay(?:ment)?|automatic payment|online payment|card payment|payment - received|payment posted)\b/i;
+const PAYMENT_PATTERN = /\b(payment received|payment\s*[-:]\s*thank you|payment thank you|autopay(?:ment)?|automatic payment|online payment|online pymt|card payment|card payoff|card pymt|cc payment|cc payoff|payment - received|payment posted|capital one (?:mobile )?(?:payment|pymt))\b/i;
 const REFUND_PATTERN = /\b(refund|return|reversal|credit adjustment)\b/i;
 const INCOME_PATTERN = /\b(payroll|paycheck|direct deposit|salary|interest earned|dividend)\b/i;
 const SUMMARY_PATTERN = /\b(previous balance|new balance|statement balance|minimum payment|payment due|total fees|total interest|account summary|rewards summary)\b/i;
@@ -52,8 +52,11 @@ function normalizeHeader(value: string) {
 
 function suggestedCategory(description: string) {
   const value = description.toLowerCase();
+  if (/\b(cinemark|amc(?:\s+theat(?:er|re)s?)?|movie theat(?:er|re)|movie ticket)\b/.test(value)) return "Entertainment";
+  if (/\bcostco\s+(?:gas|gasoline|fuel)\b/.test(value)) return "Transportation";
+  if (/\b(internation(?:al|als|s)? food bazar(?:r)?|mayuri international|qfc)\b/.test(value)) return "Groceries";
   if (/\b(grocery|market|supermarket|whole foods|trader joe|costco|kroger|safeway)\b/.test(value)) return "Groceries";
-  if (/\b(rent|mortgage|electric|utility|water bill|internet|comcast|verizon|at&t)\b/.test(value)) return "Housing & utilities";
+  if (/\b(seattle city light|rent|mortgage|electric|utilities?|water bill|internet|comcast|verizon|at&t)\b/.test(value)) return "Housing & utilities";
   if (/\b(restaurant|cafe|coffee|doordash|uber eats|grubhub|chipotle|mcdonald)\b/.test(value)) return "Eatout";
   if (/\b(amazon|target|walmart|home depot|best buy|store)\b/.test(value)) return "Shopping";
   if (/\b(uber|lyft|shell|chevron|exxon|parking|transit)\b/.test(value)) return "Transportation";
@@ -231,7 +234,7 @@ export function parseCsvStatement(
       warnings.push("Correct the amount.");
     }
     const explicitType = get(detectedMapping.type).toLowerCase();
-    const isPayment = PAYMENT_PATTERN.test(description) || /\bpayment\b/.test(explicitType);
+    const isPayment = PAYMENT_PATTERN.test(description) || /\b(?:payment|pymt|payoff)\b/.test(explicitType);
     const isRefund = REFUND_PATTERN.test(description) || /\b(refund|return|reversal)\b/.test(explicitType);
     const isIncome = INCOME_PATTERN.test(description) || /\b(income|deposit|payroll|salary)\b/.test(explicitType);
     let type: ImportTransactionType;
@@ -240,8 +243,6 @@ export function parseCsvStatement(
     else if (isRefund) type = "refund";
     else if (negative) {
       type = "refund";
-      warnings.push("Negative amount interpreted as a refund. Verify or change the type.");
-      confident = false;
     }
     else if (isIncome) type = "income";
     else if (/\bcredit\b/.test(explicitType)) {

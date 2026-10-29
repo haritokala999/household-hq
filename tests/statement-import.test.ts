@@ -65,6 +65,31 @@ test("CSV parser separates purchases, refunds, income, and card payments", () =>
   assert.ok(rows[3].warnings.some((warning) => warning.includes("not purchases")));
 });
 
+test("statement imports suggest requested merchant categories and include signed refunds", () => {
+  const csv = [
+    "Date,Description,Amount,Type",
+    "2025-02-01,Cinemark,18.00,Purchase",
+    "2025-02-02,AMC Theatres,22.00,Purchase",
+    "2025-02-03,Internations food Bazar,34.00,Purchase",
+    "2025-02-04,Mayuri International,45.00,Purchase",
+    "2025-02-05,QFC,28.00,Purchase",
+    "2025-02-06,Neighborhood Gym,50.00,Purchase",
+    "2025-02-07,Costco Gas,40.00,Purchase",
+    "2025-02-08,Returned groceries,-12.00,Purchase",
+    "2025-02-09,CC pymt,300.00,Payment",
+  ].join("\n");
+  const rows = parseCsvStatement(csv, "USD").rows;
+  assert.deepEqual(rows.map(({ category }) => category), [
+    "Entertainment", "Entertainment", "Groceries", "Groceries", "Groceries",
+    "Health and fitness", "Transportation", "MISC", "MISC",
+  ]);
+  assert.equal(rows[7].type, "refund");
+  assert.equal(rows[7].included, true);
+  assert.equal(rows[7].amountMinor, 1200);
+  assert.equal(rows[8].type, "payment");
+  assert.equal(rows[8].included, false);
+});
+
 test("identical purchases on distinct rows remain independently importable", () => {
   const csv = [
     "Date,Description,Amount,Type",
@@ -81,7 +106,7 @@ test("identical purchases on distinct rows remain independently importable", () 
   );
 });
 
-test("CSV parser flags ambiguous negatives and invalid dates for review", () => {
+test("CSV parser treats signed negative amounts as refunds and flags invalid dates for review", () => {
   const csv = [
     "Date,Description,Amount",
     "31/01/2025,Merchant,-12.34",
@@ -90,7 +115,7 @@ test("CSV parser flags ambiguous negatives and invalid dates for review", () => 
   const rows = parseCsvStatement(csv, "USD").rows;
   assert.equal(rows[0].date, "2025-01-31");
   assert.equal(rows[0].type, "refund");
-  assert.equal(rows[0].included, false);
+  assert.equal(rows[0].included, true);
   assert.equal(rows[1].date, "");
   assert.equal(rows[1].included, false);
 });
